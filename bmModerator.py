@@ -726,8 +726,9 @@ Other Information:
         #logCommand(strftime("%Y_%m_%d'%H_%M_%S",timeStamp), replyAddress) #Logs command to file 
             
     elif (isPending(toAddress,fromAddress) == True): #Person was sent an invite and we are currently pending their acception
-        whitelisted('add',toAddress,fromAddress) #adds them as a whitelisted user
-        print 'User added to whitelist'
+        if(subject[:8].lower() == "--accept"):
+            whitelisted('add',toAddress,fromAddress) #adds them as a whitelisted user
+            print 'User added to whitelist'
         
     elif (isMailingList(toAddress) == True):#Elif it is a mailing list
         print 'Processing mailing list request'
