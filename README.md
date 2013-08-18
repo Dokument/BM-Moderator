@@ -34,4 +34,7 @@ All commands are sent in the subject line. Sending "--help" will return a list o
 
 
 This is very beta at the moment so if you like this project, check back for updates.
+
+Thanks,
+
 .dok
