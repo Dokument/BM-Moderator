@@ -25,6 +25,7 @@ Modify your Bitmessage keys.dat file to call bmModerator.py with "apinotifypath 
 Run Bitmessge and geneate an address, or addresses, to use as a mailing list
 Run "bmModerator.py initalize"
 - Enter in the relevant API information
+- Modify the bmModerator.cfg file to set "ismailinglist = true" since they are set false by default. DO NOT SET AS MAILING LIST ON THE GUI OR KEYS.DAT
 - The first admin has to be manually added
 -- add "DAV89w336ovy6BUJnfVRD5B9qipFbRgmr = admin" under the section for the mailing list (using their bm address not including "BM-")
 - Send a message from the account you just added, to the mailing list, with the subject "--help" and you should get a response with the help file
