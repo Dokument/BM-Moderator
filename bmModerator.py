@@ -516,7 +516,7 @@ def processMsg():
     subject = subject.lstrip() #Removes spaces and white space from beginning of subject. 
     message = message.lstrip() #Removes spaces and white space from beginning of message. 
 
-    if ((isModerator(toAddress,fromAddress)== True) or (isAdmin(toAddress,fromAddress)) and (subject[:2] == "--")): #removes "BM- from address" and checks if a moderator or admin and if sending command
+    if (((isModerator(toAddress,fromAddress)== True) or (isAdmin(toAddress,fromAddress))) and (subject[:2] == "--")): #removes "BM- from address" and checks if a moderator or admin and if sending command
         #Begin moderator commands
         print 'Sender is a moderator or administrator.'
         if (subject[:6].lower() == "--help") or (subject[3:].lower() == "--h"):
@@ -726,7 +726,7 @@ Other Information:
         #logCommand(strftime("%Y_%m_%d'%H_%M_%S",timeStamp), replyAddress) #Logs command to file 
             
     elif (isPending(toAddress,fromAddress) == True): #Person was sent an invite and we are currently pending their acception
-        if(subject[:8].lower() == "--accept"):
+        if(subject[:8].lower() == "--accept") or subject[6].lower() == "accept":
             whitelisted('add',toAddress,fromAddress) #adds them as a whitelisted user
             print 'User added to whitelist'
         
@@ -750,8 +750,9 @@ Other Information:
                 sys.exit() #Since they are blacklisted, exit and do nothing.
         if (str((subject[:4]).lower()) == 're: '):
             subject = subject[4:] #Removes re: or RE: from subject
-        if ( str(subject[:(len(addLabel)+2)]).lower() != str(addLabel)): #If it is equal then there is nothing to change with the subject
-            subject = (addLabel + subject).encode('base64') #Set the new subject
+            
+        if ( str(subject[:len(addLabel)]).lower() != str(addLabel).lower()): #If it is equal then there is nothing to change with the subject
+            subject = (addLabel + ' ' + subject) #Set the new subject
 
         maxLength = safeConfigGetString(toAddress[3:],'maxlength')
         
@@ -762,11 +763,12 @@ Other Information:
         if (len(subject) > int(500)): #Truncates the subject if over 500 characters
                 subject = (subject[:int(500)] + '... Truncated.\n')
                 
-        message = strftime("%a, %Y-%m-%d %H:%M:%S UTC",gmtime()) + '   Message ostensibly from ' + fromAddress + ':\n\n' + message #adds the message ostensibly from text.
+        message = strftime("%a, %Y-%m-%d %H:%M:%S UTC",gmtime()) + '   Message ostensibly from ' + str(fromAddress) + ':\n\n' + str(message) #adds the message ostensibly from text.
 
         print 'Message built, ready to send. Sending...'
         
         message = message.encode('base64') #Encode the message.
+        subject = subject.encode('base64')
         api.sendBroadcast(toAddress,subject,message) #Build the message and send it
         print 'Sent.'
 
