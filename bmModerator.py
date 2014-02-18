@@ -1,24 +1,23 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
+
 # Created by Adam Melton (.dok) referenceing https://bitmessage.org/wiki/API_Reference for API documentation
 # Distributed under the MIT/X11 software license. See the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-# This is an example of a moderator for PyBitmessage 0.3.5 mailing lists, by .dok (0.0.1)
-
-import ConfigParser
+import time
+import sys
+import os
+import json
+import getopt
 import xmlrpclib
 import hashlib
-import getopt
-import json
-import sys
-import time
-from time import strftime, gmtime
-import os
+from time import strftime,gmtime
+import sqlite3 as lite
 
-configFile = 'bmModerator.cfg'
+database = 'bmModerator.db'
 
-#Begin BM address verifiication
-###############################################################################################################
+# Begin BM address verifiication
+# ##############################################################################################################
 
 ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -39,762 +38,1433 @@ def decodeBase58(string, alphabet=ALPHABET): #Taken from addresses.py
             num += alphabet.index(char) * (base ** power)
             power -= 1
     except:
-        #character not found (like a space character or a 0)
         return 0
     return num
 
 def decodeAddress(address):
-    #returns true if valid, false if not a valid address. - taken from addresses.py
-
-    address = str(address).strip()
-
-    if address[:3].lower() == 'bm-':
-        integer = decodeBase58(address[3:])
-    else:
-        integer = decodeBase58(address)
-        
-    if integer == 0:
-        #print 'invalidcharacters' Removed because it appears in regular sendMessage
-        return False
-    #after converting to hex, the string will be prepended with a 0x and appended with a L
-    hexdata = hex(integer)[2:-1]
-
-    if len(hexdata) % 2 != 0:
-        hexdata = '0' + hexdata
-
-    #print 'hexdata', hexdata
-
-    data = hexdata.decode('hex')
-    checksum = data[-4:]
-
-    sha = hashlib.new('sha512')
-    sha.update(data[:-4])
-    currentHash = sha.digest()
-    #print 'sha after first hashing: ', sha.hexdigest()
-    sha = hashlib.new('sha512')
-    sha.update(currentHash)
-    #print 'sha after second hashing: ', sha.hexdigest()
-
-    if checksum != sha.digest()[0:4]:
-        print '\n     Checksum Failed\n'
-        return False
-
-    return True
-
-###############################################################################################################
-#End BM address verifiication
-
- 
-#************************************* Begin File Lock *************************
-class FileLockException(Exception):
-    pass
- 
-class FileLock(object):
-    """ A file locking mechanism that has context-manager support so 
-        you can use it in a with statement. This should be relatively cross
-        compatible as it doesn't rely on msvcrt or fcntl for the locking.
-    """
- 
-    def __init__(self, file_name, timeout=10, delay=.05):
-        """ Prepare the file locker. Specify the file to lock and optionally
-            the maximum timeout and the delay between each attempt to lock.
-        """
-        self.is_locked = False
-        self.lockfile = os.path.join(os.getcwd(), "%s.lock" % file_name)
-        self.file_name = file_name
-        self.timeout = timeout
-        self.delay = delay
- 
- 
-    def acquire(self):
-        """ Acquire the lock, if possible. If the lock is in use, it check again
-            every `wait` seconds. It does this until it either gets the lock or
-            exceeds `timeout` number of seconds, in which case it throws 
-            an exception.
-        """
-        start_time = time.time()
-        while True:
-            try:
-                self.fd = os.open(self.lockfile, os.O_CREAT|os.O_EXCL|os.O_RDWR)
-                break;
-            except OSError as e:
-                if e.errno != errno.EEXIST:
-                    raise 
-                if (time.time() - start_time) >= self.timeout:
-                    raise FileLockException("Timeout occured.")
-                time.sleep(self.delay)
-        self.is_locked = True
- 
- 
-    def release(self):
-        """ Get rid of the lock by deleting the lockfile. 
-            When working in a `with` statement, this gets automatically 
-            called at the end.
-        """
-        if self.is_locked:
-            os.close(self.fd)
-            os.unlink(self.lockfile)
-            self.is_locked = False
- 
- 
-    def __enter__(self):
-        """ Activated when used in the with statement. 
-            Should automatically acquire a lock to be used in the with block.
-        """
-        if not self.is_locked:
-            self.acquire()
-        return self
- 
- 
-    def __exit__(self, type, value, traceback):
-        """ Activated at the end of the with statement.
-            It automatically releases the lock if it isn't locked.
-        """
-        if self.is_locked:
-            self.release()
- 
- 
-    def __del__(self):
-        """ Make sure that the FileLock instance doesn't leave a lockfile
-            lying around.
-        """
-        self.release()
-#************************************* End File Lock *************************
-
-def initConfig(): #Initalizes the config file.
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    try: #Try to see if the file already has data in it
-        config.get('moderatorsettings', 'apiport')
-    except:    #initalize config file
-        config.add_section('moderatorsettings')        
-        config.set('moderatorsettings', 'apiport', raw_input('Enter the apiPort:'))
-        config.set('moderatorsettings', 'apiinterface', raw_input('Enter the apiInterface:'))
-        config.set('moderatorsettings', 'apiusername', raw_input('Enter the apiUserName:'))
-        config.set('moderatorsettings', 'apipassword', raw_input('Enter the apiPassword:'))
-        
-        with open(configFile, 'wb') as configfile:
-            config.write(configfile)
-
-        print 'Configuration File Initalized.'
-        initConfig() #Call this procedure again since it is initalized
-
-    api = xmlrpclib.ServerProxy(apiData()) #Connect to BitMessage using these api credentials stored in the config file
-    jsonAddresses = json.loads(api.listAddresses())
-    numAddresses = len(jsonAddresses['addresses']) #Number of addresses
-
-    for addNum in range (0, numAddresses): #processes all of the addresses and gets the label for this address.
-        label = jsonAddresses['addresses'][addNum]['label']
-        address = jsonAddresses['addresses'][addNum]['address']
-        
-        config.add_section(address[3:])   
-        config.set(address[3:], 'label', label) #sets the label as the label for the address by default
-        config.set(address[3:], 'ismailinglist', 'false')
-        config.set(address[3:], 'maxlength', '')
-        config.set(address[3:], 'whiteorblacklist', 'blacklist')
-
-    with open(configFile, 'wb') as configfile:
-        config.write(configfile)
-
-    print 'Configuration File Initalized.'
-
-def apiData():
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    try: #checks to make sure that everyting is configured correctly.
-        config.get('moderatorsettings', 'apiport')
-        config.get('moderatorsettings', 'apiinterface')
-        config.get('moderatorsettings', 'apiusername')
-        config.get('moderatorsettings', 'apipassword')
-    except:
-        print 'Error accessing config file, please run "bmModerator initalize"'
-        return ''
-
-    config.read(configFile)#read again since changes have been made
-    apiPort = int(config.get('moderatorsettings', 'apiport'))
-    apiInterface = config.get('moderatorsettings', 'apiinterface')
-    apiUsername = config.get('moderatorsettings', 'apiusername')
-    apiPassword = config.get('moderatorsettings', 'apipassword')
-    
-    print '\n     API data successfully imported.\n'
-        
-    return "http://" + apiUsername + ":" + apiPassword + "@" + apiInterface+ ":" + str(apiPort) + "/" #Build the api credentials
-
-'''def logCommand(recTime,bmAddress): #Removed until further notice
-    global configFile
-    config = ConfigParser.RawConfigParser()
-    logFile = 'bmModLog.txt'
-    config.read(configFile)
-
-    try: #try to open the file
-        config.get('EchoServer','processedTotal')
-    except:# if it fails, then initialize the EchoLog.dat file since this is the first time running the program
-        print 'Initializing EchoLog.dat'
-        config.add_section('EchoServer')
-        config.add_section('EchoLogs')
-        
-        config.set('EchoServer','versionNumber',str(versionNo))
-        config.set('EchoServer','processedTotal','0')
-
-    processedTotal = int(config.get('EchoServer','processedTotal'))
-    processedTotal = processedTotal + 1
-    
-    config.set('EchoServer','processedTotal',str(processedTotal)) #echo count
-    config.set('EchoLogs',str(processedTotal),str(recTime + "'" + bmAddress)) #message information
-    
-    with open(echoLogFile, 'wb') as configfile: #updates the total number of processed messages
-        config.write(configfile)
-
-    print 'Command successfully logged.'
-    '''
-
-def safeConfigGetBoolean(section,field):
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-    
     try:
-        return config.getboolean(section,field)
-    except:
-        return False
+        # Returns true if valid, false if not a valid address. - taken from addresses.py
+        address = str(address).strip()
 
-def safeConfigGetString(section,field):
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-    
-    try:
-        return config.get(section,str(field))
-    except:
-        return ''
-
-def isModerator(mlAddress,bmAddress):#Returns true if the address is a moderator of the specified mailing list
-    if (safeConfigGetString(mlAddress[3:],bmAddress[3:]).lower() == 'moderator'):
-        return True
-    else:
-        return False
-
-def isAdmin(mlAddress,bmAddress):#Returns true if the address is a admin of the specified mailing list
-    if (safeConfigGetString(mlAddress[3:],bmAddress[3:]).lower() == 'admin'):
-        return True
-    else:
-        return False
-
-def isPending(mlAddress,bmAddress):#Returns true if the address is pending an invite acception
-    if (safeConfigGetString(mlAddress[3:],bmAddress[3:]).lower() == 'pending'):
-        return True
-    else:
-        return False
-    
-def isMailingList(Address): #Addresses that are mailing lists return true, ones that are not return false
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    Address = Address [3:]
-    
-    try:
-        return config.getboolean(Address,'ismailinglist')
-    except:#Not found so initalize for this address
-        config = ConfigParser.SafeConfigParser()
-        with FileLock(configFile, timeout=3) as lock:
-        #File Locked
-            config.read(configFile)
-        
-        config.add_section(Address)
-        config.set(Address, 'ismailinglist', 'false')
-        config.set(Address, 'maxlength', '')
-        config.set(Address, 'whiteorblacklist', 'blacklist')
-        print 'Address added to config file. isMailingList set as FALSE by default'
-        
-        with open(configFile, 'wb') as configfile:
-            config.write(configfile)
+        if address[:3].lower() == 'bm-':
+            integer = decodeBase58(address[3:])
+        else:
+            integer = decodeBase58(address)
             
-        return False
-
-
-def chgModerator(addRem,mlAddress,bmAddress): #adds or removes moderator from mailing list
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    if (addRem == 'add'):
-        config.set(mlAddress[3:],bmAddress,'moderator')
-    elif (addRem == 'rem'):
-        config.set(mlAddress[3:],bmAddress,'')
-
-    with open(configFile, 'wb') as configfile: #Safe Config
-        config.write(configfile)
-
-def chgAdmin(addRem,mlAddress,bmAddress): #adds or removes admin from mailing list
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    if (addRem == 'add'):
-        config.set(mlAddress[3:],bmAddress,'admin')
-    elif (addRem == 'rem'):
-        config.set(mlAddress[3:],bmAddress,'')
-
-    with open(configFile, 'wb') as configfile: #Safe Config
-        config.write(configfile)
-
-def setMaxLength(mlAddress,length):
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    config.set(mlAddress[3:],'maxlength',str(length))
-
-    with open(configFile, 'wb') as configfile: #Save Config
-        config.write(configfile)
-
-def inviteUser(mlAddress,bmAddress):
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-
-    if ((isAdmin(mlAddress, bmAddress) == True) or (isModerator(mlAddress, bmAddress) == True)): #Could not change because they are an admin/moderator
-        return False
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
-
-    config.set(mlAddress[3:],bmAddress[3:],'pending')
-
-    with open(configFile, 'wb') as configfile: #Save Config
-        config.write(configfile)
-
-    api = xmlrpclib.ServerProxy(apiData()) #Connect to BitMessage using these api credentials stored in the config file
-    
-    subject = '[BM-MODERATOR] You have been invited to join this mailing list.'
-    message = """
-This message was automatically sent to inform you that you have been invited to join this mailing list.
-Please reply to this message with "Accept" as the subject and you will then be able to participate as a member of this mailing list.
-
-Do not forget that you must subscribe to this address in order to receive broadcasts from the mailing list.
-
-If you do not wish to join this mailing list or feel that it was sent by error, simply do not reply.
-"""
-    ackData = api.sendMessage(bmAddress, mlAddress, subject.encode('base64'),message.encode('base64'))
-
-    return True
-
-def setBlacklist(mlAddress): #sets the address as blacklist
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
+        if integer == 0:
+            return False
         
+        hexdata = hex(integer)[2:-1]
+
+        if len(hexdata) % 2 != 0:
+            hexdata = '0' + hexdata
+
+        data = hexdata.decode('hex')
+        checksum = data[-4:]
+
+        sha = hashlib.new('sha512')
+        sha.update(data[:-4])
+        currentHash = sha.digest()
+
+        sha = hashlib.new('sha512')
+        sha.update(currentHash)
+
+        if checksum != sha.digest()[0:4]:
+            print '\n     Checksum Failed\n'
+            return False
+
+        return True
+    except Exception,e:
+        print 'ERROR decoding address:',e
+    return False
+
+# ##############################################################################################################
+# End BM address verifiication
+
+def create_db():
+    try:
+        os.remove(database)
+        time.sleep(1)
+    except Exception,e:
+        pass
+    
+    try:
+        con = lite.connect(database) 
+        cur = con.cursor()
+
+        cur.execute("CREATE TABLE api_config(id INTEGER PRIMARY KEY, api_port TEXT,api_address TEXT,api_username TEXT, api_password TEXT, global_admin_bm_address TEXT)")
+        cur.execute("INSERT INTO api_config VALUES (?,?,?,?,?,?)",('0','8442','127.0.0.1','apiUser','apiPass',' '))
         
-    config.set(mlAddress[3:], 'whiteorblacklist', 'blacklist')
+        cur.execute("CREATE TABLE bm_addresses_config(id INTEGER PRIMARY KEY, bm_address TEXT, label TEXT, enabled TEXT, motd TEXT,whitelisted TEXT, max_msg_length INT, echo_address TEXT)")
 
-    with open(configFile, 'wb') as configfile: #Save Config
-        config.write(configfile)
-    return True
+        cur.execute("CREATE TABLE users_config(id INTEGER PRIMARY KEY, ident_bm_address TEXT, usr_bm_address TEXT, nickname TEXT, admin_moderator TEXT, whitelisted_blacklisted TEXT)")
 
-def setWhitelist(mlAddress): #sets the address as blacklist
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
+        cur.execute("CREATE TABLE command_history(id INTEGER PRIMARY KEY, ident_bm_address TEXT, usr_bm_address TEXT, date_time TEXT, command TEXT, message_snippet TEXT)")
         
-    config.set(mlAddress[3:], 'whiteorblacklist', 'whitelist')
+        cur.execute("CREATE TABLE stats(id INTEGER PRIMARY KEY, date_day TEXT, bm_address TEXT, num_sent_broadcasts INT, num_sent_messages INT)")
 
-    with open(configFile, 'wb') as configfile: #Save Config
-        config.write(configfile)
+        cur.execute("CREATE TABLE filter(id INTEGER PRIMARY KEY, banned_text TEXT)")
 
-    return True
+        con.commit()
+        cur.close()
 
-def whitelisted(addOrRem, mlAddress, bmAddress): #adds or removes a whitelisted user
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-
-    if ((isAdmin(mlAddress, bmAddress) == True) or (isModerator(mlAddress, bmAddress) == True)): #Could not change because they are an admin/moderator
+    except Exception,e:
+        print 'Failed creating database (%s):%s' % (database,e)
+'''
+def create_add_address_table(con,ident_address):    
+    try:        
+        cur = con.cursor()
+        #Select from table, if fail the create
+        
+        cur.execute("CREATE TABLE IF NOT EXISTS ?(id INTEGER PRIMARY KEY, bm_address TEXT, nickname TEXT, admin_moderator TEXT, whitelisted_blacklisted TEXT)",(ident_address,))
+        cur.execute("INSERT INTO bm_addresses_config VALUES(?,?,?,?,?,?,?,?)",(None,bm_address,label,enabled,motd,whitelisted,max_msg_length,echo_address))
+        
+        con.commit()
+        return True
+    except Exception,e:
+        print 'Failed',e
         return False
-    
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
+'''
 
-    if (addOrRem == 'add'):
-        config.set(mlAddress[3:],bmAddress[3:],'whitelisted')
-    elif (addOrRem == 'rem'):
-        config.set(mlAddress[3:],bmAddress[3:],'nolongerwhitelisted')#Essentially removes whitelisted permissions
+def api_data(con):
+    # Returns API url string
+    cur = con.cursor()
+    cur.execute("SELECT api_port,api_address,api_username,api_password FROM api_config")
+    temp = cur.fetchone()
+    cur.close()
 
-    with open(configFile, 'wb') as configfile: #Save Config
-        config.write(configfile)
+    if temp == None or temp == '':
+        print 'Data Error with API Table. Blank.'
+    else:
+        api_port,api_address,api_username,api_password = temp
+        
+    return "http://" + str(api_username) + ":" + str(api_password) + "@" + str(api_address)+ ":" + str(api_port) + "/"
 
-    return True
-
-def blacklisted(addOrRem, mlAddress, bmAddress): #adds or removes a blacklisted user
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-
-    if ((isAdmin(mlAddress, bmAddress) == True) or (isModerator(mlAddress, bmAddress) == True)): #Could not change because they are an admin/moderator
+def is_int(s):
+    try: 
+        int(s)
+        return True
+    except ValueError:
         return False
+
+def format_address(address_to_format):
+    # Removes BM- prefix if it exists
+    if address_to_format[:3].lower() == 'bm-':
+        address_to_format = address_to_format[3:]
+    return address_to_format
+
+def is_global_admin(con,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
     
-    with FileLock(configFile, timeout=3) as lock:
-    #File Locked
-        config.read(configFile)
+    cur = con.cursor()
+    cur.execute("SELECT global_admin_bm_address FROM api_config WHERE id=?",('0',))
+    temp = cur.fetchone()
+    cur.close()
 
-    if (addOrRem == 'add'):
-        config.set(mlAddress[3:],bmAddress[3:],'blacklisted')
-    elif (addOrRem == 'rem'):
-        config.set(mlAddress[3:],bmAddress[3:],'nolongerblacklisted')#Essentially removes whitelisted permissions
+    if temp == None or temp == '':
+        print 'Data Error with API Table. Blank.'
+        return False
+    else:
+        global_admin_bm_address = str(temp[0])
 
-    with open(configFile, 'wb') as configfile: #Save Config
-        config.write(configfile)
+    global_admin_bm_address = format_address(global_admin_bm_address)
 
-    return True
-
-def isWhitelisted(mlAddress, bmAddress): #Checks if an address is whitelisted
-    if (safeConfigGetString(mlAddress[3:],bmAddress[3:]).lower() == 'whitelisted'):
+    if usr_bm_address == global_admin_bm_address:
         return True
     else:
         return False
 
-def isBlacklisted(mlAddress, bmAddress): #Checks if an address is blacklisted
-    if (safeConfigGetString(mlAddress[3:],bmAddress[3:]).lower() == 'blacklisted'):
-        return True
-    else:
-        return False
+def is_admin(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
 
-def processMsg():
-    global configFile
-    config = ConfigParser.SafeConfigParser()
-    api = xmlrpclib.ServerProxy(apiData()) #Connect to BitMessage using these api credentials stored in the config file
-    jsonAddresses = json.loads(api.listAddresses())
-    numAddresses = len(jsonAddresses['addresses']) #Number of addresses
+    cur = con.cursor()
+    cur.execute("SELECT id,ident_bm_address,admin_moderator,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address,])
+    while True:
+        temp = cur.fetchone()
 
-    inboxMessages = json.loads(api.getAllInboxMessages()) #Parse json data in to python data structure
-    print 'Loaded all inbox messages for processing.'
+        if temp == None or temp == '':
+            return False
+        else:
+            id_num,ident_bm_address,admin_moderator,whitelisted_blacklisted = temp
+
+            if ident_bm_address == ident_address:
+                if whitelisted_blacklisted == 'blacklisted':
+                    return False
+                elif admin_moderator == 'admin':
+                    return True
+                else:
+                    return False
+
+def is_moderator(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+
+    cur = con.cursor()
+    cur.execute("SELECT id,ident_bm_address,admin_moderator,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address,])
+    while True:
+        temp = cur.fetchone()
+
+        if temp == None or temp == '':
+            return False
+        else:
+            id_num,ident_bm_address,admin_moderator,whitelisted_blacklisted = temp
+
+            if ident_bm_address == ident_address:
+                if whitelisted_blacklisted == 'blacklisted':
+                    return False
+                elif admin_moderator == 'moderator':
+                    return True
+                else:
+                    return False
+
+def is_whitelisted(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
     
-    newestMessage = (len(inboxMessages['inboxMessages']) - 1) #Find the newest message
+    cur = con.cursor()
+    cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address,])
+    while True:
+        temp = cur.fetchone()
+
+        if temp == None or temp == '':
+            return False
+        else:
+            id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+            if ident_bm_address == ident_address:
+                if whitelisted_blacklisted == 'whitelisted':
+                    return True
+                else:
+                    return False
+
+def is_blacklisted(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
     
-    fromAddress = inboxMessages['inboxMessages'][newestMessage]['fromAddress'] #Get the return address
-    toAddress = inboxMessages['inboxMessages'][newestMessage]['toAddress'] #Get my address
-    message = inboxMessages['inboxMessages'][newestMessage]['message'].decode('base64') #Gets the message sent by the user
-    subject = inboxMessages['inboxMessages'][newestMessage]['subject'].decode('base64') #Gets the subject
+    cur = con.cursor()
+    cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address,])
+    while True:
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            return False
+        else:
+            id_num,ident_bm_address,whitelisted_blacklisted = temp
 
-    print 'Loaded and parsed data.'
+            if ident_bm_address == ident_address:
+                if whitelisted_blacklisted == 'blacklisted':
+                    return True
+                else:
+                    return False
 
-    addLabel = '[' + safeConfigGetString(toAddress[3:],'label') + ']'
-
-    subject = subject.lstrip() #Removes spaces and white space from beginning of subject. 
-    message = message.lstrip() #Removes spaces and white space from beginning of message. 
-
-    if (((isModerator(toAddress,fromAddress)== True) or (isAdmin(toAddress,fromAddress))) and (subject[:2] == "--")): #removes "BM- from address" and checks if a moderator or admin and if sending command
-        #Begin moderator commands
-        print 'Sender is a moderator or administrator.'
-        if (subject[:6].lower() == "--help") or (subject[3:].lower() == "--h"):
-            message = """
-Help File
+def help_file():
+    message = """Help File
 ----------------------
+User Commands
+--setNick               Sets your nickname. Max 32 characters
+
 Moderator Commands
 --Help                  This help file is sent to you as a message
 --addWhitelist          Adds a user to the whitelist for this address
 --remWhitelist          Removes a user from the blacklist for this address
 --addBlacklist          Adds a user to the blacklist for this address
 --remBlacklist          Removes a user from the blacklist for this address
---inviteUser            Sends an invitation to whitelist users for this address.
+--inviteUser            Sends an invitation to whitelist users for this address
+--addFilter             Adds the message body to filter list. Essentially a spam list
+--clearFilters          Deletes all filters. Useful if a filter is added that is blocking too much
 
 Admin Commands
---setLabel              Sets the label for the mailing list. 
+--setLabel              Sets the label for the mailing list
+--setMOTD               Sets the message of the day
 --addModerator          Adds a moderator to this address
 --remModerator          Removes a moderator from this address
+--sendBroadcast         Sends whatever message you type out as a broadcast from this addres
+--listModerators        Returns a list of Moderators and their information
+--listUsers             Returns a list of all non-Admin/Moderator users and their information
+--enable                Enables a disabled address
+--disable               Disable address. Prevents users from using it. Mods and Admins still have access
+--setMaxLength          Messages exceeding the max length are truncated. Set 0 for no max length
+--getStats              UTC times. Set period in message "Day"/"Month"/"Year" or "All" for all stats
+--getCommandHistory     Returns a command history list including who, what, and when
+
+Owner Commands
 --addAdmin              Adds an admin for this address
 --remAdmin              Removed an admin from this address
---sendMessage           Sends whatever message you type to the address at the beginning of the message
---sendBroadcast         Sends whatever message you type out as a broadcast from this address
---setBlacklist          Sets this address as a blacklist. Meaning anyone can use it except those blacklisted
---setWhitelist          Sets this address as a whitelist. Meaning only whitelisted users can participate
---setMaxLength          Messages exceeding the max length are truncated. Set no value for no max length
+--listAdmins            Returns a list of Admins and their information
+--generateNewAddress    Returns a new address that can be used. Defaults to Mailing List
+--setBlacklist          Anyone can use this address except for Blacklisted users.
+--setWhitelist          Only Whitelisted users (or Moderators/Admins) can use this address
+--setMailingList        Makes this address send a broadcast of all messages it receives
+--setEcho               Makes this address reply to all messages it receives
 
 Send all commands as the subject and all relevant data as the message (such as an address to blacklist)
 
 Example
 ----------------------
-Subject:--addModerator
-Message:BM-2DAV89w336ovy6BUJnfVRD5B9qipFbRgmr
+Subject = "--addModerator"
+Message = "BM-2DAV89w336ovy6BUJnfVRD5B9qipFbRgmr"
 ----------------------
 
 Other Information:
-* Do note that all commands are logged so do not abuse your privileges.
-* If your mailing list is set as a blacklist, then there is no purpose to have whitelisted users.
-* All moderators and admins are whitelisted by default"""
+* Do note that all commands are logged so do not abuse your privileges."""
 
-        elif (subject[:14].lower() == "--addwhitelist"): #blacklists an address
-            print '--addwhitelist'
-            message = message.replace(" ", "") #Removes all spaces from message
-            if message[:3].lower() == 'bm-': #Removes BM- from address
-                message = message[3:]
-            if (decodeAddress(message) == True): #if the address is valid, then add it to the blacklist for this mailing list. 
-                if (whitelisted('add',toAddress,message) ==True):
-                    message = str(message) + ' successfully added to the whitelist for ' + addLabel + ' ' + str(toAddress)
-                else:
-                    message = str(message) + ' could not be added to the whitelist for ' + addLabel + ' ' + str(toAddress)
-            else:
-                message = str(message) + ' is an invalid address and could not be whitelisted for ' + addLabel + ' ' + str(toAddress)
-                
-        elif (subject[:14].lower() == "--remwhitelist"): #blacklists an address
-            print '--remwhitelist'
-            message = message.replace(" ", "") #Removes all spaces from message
-            if message[:3].lower() == 'bm-': #Removes BM- from address
-                message = message[3:]
-            if (decodeAddress(message) == True): #if the address is valid, then remove it to from blacklist for this mailing list. 
-                if (whitelisted('rem',toAddress,message) == True):
-                    message = str(message) + ' successfully removed from the whitelist for ' + addLabel + ' ' + str(toAddress)
-                else:
-                    message = str(message) + ' could not be removed from the whitelist for ' + addLabel + ' ' + str(toAddress)
-            else:
-                message = str(message) + ' is an invalid address and could not be removed from the whitelist for ' + addLabel + ' ' + str(toAddress)
-        elif (subject[:14].lower() == "--addblacklist"): #blacklists an address
-            print '--addblacklist'
-            message = message.replace(" ", "") #Removes all spaces from message
-            if message[:3].lower() == 'bm-': #Removes BM- from address
-                message = message[3:]
-            if (decodeAddress(message) == True): #if the address is valid, then add it to the blacklist for this mailing list. 
-                if (blacklisted('add',toAddress,message) == True):
-                    message = str(message) + ' successfully added to the blacklist for ' + addLabel + ' ' + str(toAddress)
-                else:
-                    message = str(message) + ' could not be added to the blacklist for ' + addLabel + ' ' + str(toAddress)
-            else:
-                message = str(message) + ' is an invalid address and could not be blacklisted for ' + addLabel + ' ' + str(toAddress)
-                
-        elif (subject[:14].lower() == "--remblacklist"): #blacklists an address
-            print '--remblacklist'
-            message = message.replace(" ", "") #Removes all spaces from message
-            if message[:3].lower() == 'bm-': #Removes BM- from address
-                message = message[3:]
-            if (decodeAddress(message) == True): #if the address is valid, then remove it to from blacklist for this mailing list. 
-                if (blacklisted('rem',toAddress,message) == True):
-                    message = str(message) + ' successfully removed from the blacklist for ' + addLabel + ' ' + str(toAddress)
-                else:
-                    message = str(message) + ' could not be removed from the blacklist for ' + addLabel + ' ' + str(toAddress)
-                    
-            else:
-                message = str(message) + ' is an invalid address and could not be removed from the blacklisted for ' + addLabel + ' ' + str(toAddress)
-        elif (subject[:12].lower() == "--inviteuser"): #Invites a user to the mailing list
-            print '--inviteuser'
-            message = message.replace(" ", "") #Removes all spaces from message
-            #if message[:3].lower() == 'bm-': #Removes BM- from address
-                #message = message[3:]
-            if (decodeAddress(message) == True): #if the address is valid, then send invite 
-                if (inviteUser(toAddress,message) == True): #sends the invite to the user and adds pending to the config
-                    message = str(message) + ' successfully invited to ' + addLabel + ' ' + str(toAddress)
-                else:
-                    message = str(message) + ' could not be invited to ' + addLabel + ' ' + str(toAddress)
-            else:
-                message = str(message) + ' is an invalid address and could not be invited to ' + addLabel + ' ' + str(toAddress)
-        elif (isAdmin(toAddress,fromAddress)== True): #only runs if admin
-            #Begin Admin commands
-            
-            print 'Command was not at moderator level, checking admin commands'
-            if (subject[:10].lower() == "--setLabel"):
+    return message
+    
+def is_command(text_string):
+    # Returns true if the string is a command
+    command_list = ['--setNick','--setNickname','--Help','--addWhitelist','--remWhitelist','--addBlacklist','--remBlacklist','--inviteUser','--addFilter',
+                    '--clearFilters','--setLabel','--setMOTD','--addModerator','--remModerator','--addAdmin','--remAdmin','--sendBroadcast',
+                    '--listModerators','--listAdmins','--listUsers','--setMailingList','--setEcho','--setBlacklist','--setWhitelist','--setMaxLength',
+                    'enable','disable','--generateNewAddress','--getStats','--getCommandHistory']
 
-                with FileLock(configFile, timeout=3) as lock:
-                #File Locked
-                    config.read(configFile)
+    # Possible Future Commands
+    # Use API to verify address
+    # Set address difficulty on creation or after creation
+    # Ability to batch whitelist/blacklist/etc addresses? Reason not to, confirmation messages
+    # Set max difficulty to send message, probably should be hard coded at least
+    # Get address information, enable status, whitelist status, admins mods and users, etc. all info, owner access only?
 
-                config.set('moderatorsettings', toAddress[3:], message) #sets the label
-                with open(configFile, 'wb') as configfile:
-                    config.write(configfile)
-                
-            elif (subject[:14].lower() == "--addmoderator"):
-                message = message.replace(" ", "") #Removes all spaces from message
-                if message[:3].lower() == 'bm-': #Removes BM- from address
-                    message = message[3:]
-                if (decodeAddress(message) == True): #if the address is valid, then remove it to from blacklist for this mailing list. 
-                    chgModerator('add',toAddress,message)
-                    ackData = api.sendMessage(message, toAddress, 'BM-Moderator'.encode('base64'), (fromAddress + ' made you a moderator of ' + addLabel + ' ' + toAddress + '\n\nReply to this message with --help as the subject line for a list of available commands').encode('base64'))
-                    message = str(message) + ' successfully added as a moderator for ' + str(toAddress)
-                else:
-                    message = str(message) + ' is an invalid address and could not be added as a moderator for '+ addLabel + ' ' + str(toAddress)
-                    
-                    #message to new moderator fromAddress + ' made you a moderator of ' + mlAddress '. Send a message with the text --help or -h for a list of available commands.'
-                    #message to sender 'You successfully addeded ' + theaddress + ' as a moderator.'
-            
-            elif (subject[:14].lower() == "--remmoderator"):
-                message = message.replace(" ", "") #Removes all spaces from message
-                if message[:3].lower() == 'bm-': #Removes BM- from address
-                    message = message[3:]
-                if (decodeAddress(message) == True): #if the address is valid, then remove it to from blacklist for this mailing list. 
-                    chgModerator('rem',toAddress,message)
-                    ackData = api.sendMessage(message, toAddress, 'BM-Moderator'.encode('base64'), ('You have been removed from moderating '+ addLabel + ' '  + toAddress).encode('base64'))
-                    message = str(message) + ' successfully removed as a moderator for ' + str(toAddress)
-                else:
-                    message = str(message) + ' is an invalid address and could not be removed as a moderator for '+ addLabel + ' '  + str(toAddress)
-                    
-                #Check if they were a moderator already
-                # -if they wern't or false, then to sender  theaddress+ ' was already not a moderator'
-            elif (subject[:10].lower() == "--addadmin"):
-                message = message.replace(" ", "") #Removes all spaces from message
-                if (message[3:]).lower() == 'bm-': #Removes BM- from address
-                    message = message[3:]
-                if (decodeAddress(message) == True): #if the address is valid, then remove it to from blacklist for this mailing list. 
-                    chgAdmin('add',toAddress,message)
-                    message = str(message) + ' successfully added as an Admin for ' + str(toAddress)
-                    ackData = api.sendMessage(message, toAddress, 'BM-Moderator'.encode('base64'), (fromAddress + ' made you an Admin of '+ addLabel + ' '  + toAddress + '\n\nReply to this message with --help as the subject line for a list of available commands').encode('base64'))
-                else:
-                    message = str(message) + ' is an invalid address and could not be added as an Admin for '+ addLabel + ' '  + str(toAddress)
-                    
-                    #message to new moderator fromAddress + ' made you a moderator of ' + mlAddress '. Send a message with the text --help or -h for a list of available commands.'
-                    #message to sender 'You successfully addeded ' + theaddress + ' as a moderator.'
-                
-            elif (subject[:10].lower() == "--remadmin"):
-                message = message.replace(" ", "") #Removes all spaces from message
-                if message[:3].lower() == 'bm-': #Removes BM- from address
-                    message = message[3:]
-                if (decodeAddress(message) == True): #if the address is valid, then remove it to from blacklist for this mailing list. 
-                    chgAdmin('rem',toAddress,message)
-                    message = str(message) + ' successfully removed as an Admin for ' + str(toAddress)
-                    ackData = api.sendMessage(message, toAddress, 'BM-Moderator'.encode('base64'), (fromAddress + ' removed you as an Admin of '+ addLabel + ' '  + toAddress).encode('base64'))
-                else:
-                    message = str(message) + ' is an invalid address and could not be removed as an Admin for '+ addLabel + ' '  + str(toAddress)
-#            elif (subject[:13].lower() == "--sendmessage"):
-#                subject = '[MODERATOR]'.encode('base64')
-#                message = message.encode('base64')
-#                Add code to get address from beginning of message
-#                ackData = api.sendMessage(fromAddress, toAddress, subject, message)
-#                sys.exit()
-#                allows admins to send messages on behalf of the mailing list address
-            
-            elif (subject[:15].lower() == "--sendbroadcast"):
-                api.sendBroadcast(toAddress,('BM-Moderator').encode('base64'),message.encode('base64')) #Build the message and send it
-                sys.exit()
-                #allows moderator to send broadcasts on behalf of the broacast/mailing list address
+    for command in command_list:
+        if command.lower() in text_string.lower():
+            return True
 
-            elif (subject[:14].lower() == "--setblacklist"):
-                if (setBlacklist(toAddress) == True): #sets the mailing list address as blacklisted
-                    message = config.get(toAddress[3:],'label') + ' ' + toAddress  + ' is now set to Blacklist.'
-                else:
-                    message = config.get(toAddress[3:],'label') + ' ' + toAddress  + ' could not be set to Blacklist.'                    
-                
-            elif (subject[:14].lower() == "--setwhitelist"):
-                if (setWhitelist(toAddress) == True): #Sets the mailing list address as whitelisted
-                    message = config.get(toAddress[3:],'label') + ' ' + toAddress  + ' is now set to Whitelist.'
-                else:
-                    message = config.get(toAddress[3:],'label') + ' ' + toAddress  + ' could not be set to Whitelist.'
-                
-            elif (subject[:14].lower() == "--setMaxLength"):
-                setMaxLength(toAddress, int(message)) #Converts to int so that if there is an error, it faults here and not when trying to load the length
-                message = str(message)  + ' is now set the maximum message length for '+ config.get(toAddress[3:],'label') + ' '  + str(toAddress)
-            else: #valid admin command not found
-                message = subject + ' is an invalid command. Send a message with "--help" as the subject to receive a list of available commands'
+    return False    
 
-        else: #valid moderator command not found
-            message = subject + ' is an invalid command or you do not have permission to use this command. Send a message with "--help" as the subject to receive a list of available commands'                
+def get_bm_ident_info(con,ident_address):
+    # Returns information about a bm address (an identity)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    
+    cur.execute("SELECT label,enabled,motd,whitelisted,max_msg_length,echo_address FROM bm_addresses_config WHERE bm_address=?",[ident_address,])
+    temp = cur.fetchone()
 
-        subject = '[BM-MODERATOR]'.encode('base64')
-        message = message.encode('base64')
-        ackData = api.sendMessage(fromAddress, toAddress, subject, message)#Sends a message back to the person issuing the command to alert them that the command was executed or not.
+    if temp == None or temp == '':
+        cur.execute("INSERT INTO bm_addresses_config VALUES(?,?,?,?,?,?,?,?)",(None,ident_address,'no label','enabled','','false','0','false'))
+        con.commit()
 
-        #print 'Begin logging Command'
-        #logCommand(strftime("%Y_%m_%d'%H_%M_%S",timeStamp), replyAddress) #Logs command to file 
-            
-    elif (isPending(toAddress,fromAddress) == True): #Person was sent an invite and we are currently pending their acception
-        if(subject[:8].lower() == "--accept") or subject[6].lower() == "accept":
-            whitelisted('add',toAddress,fromAddress) #adds them as a whitelisted user
-            print 'User added to whitelist'
-        
-    elif (isMailingList(toAddress) == True):#Elif it is a mailing list
-        print 'Processing mailing list request'
-        with FileLock(configFile, timeout=3) as lock:
-        #File Locked
-            config.read(configFile)
-
-        if (safeConfigGetString(toAddress[3:],'whiteorblacklist') == 'whitelist'): #check if the mailing list is a whitelist, if so, only allow whitelisted addresses
-            print 'Address is whitelisted'
-            
-            if(isWhitelisted(toAddress,fromAddress) == False and isModerator(toAddress,fromAddress) == False and isAdmin(toAddress,fromAddress) == False):
-                print 'User not whitelisted, exiting'
-                sys.exit() #Since they are not whitelisted, exit and do nothing.
-        elif (safeConfigGetString(toAddress[3:],'whiteorblacklist') == 'blacklist'):#check if mailing list is blacklisted, if so, deny blacklisted addresses
-            print 'Address is blacklisted'
-
-            if(isBlacklisted(toAddress,fromAddress) == True):
-                print 'User is blacklisted, exiting'
-                sys.exit() #Since they are blacklisted, exit and do nothing.
-        if (str((subject[:4]).lower()) == 're: '):
-            subject = subject[4:] #Removes re: or RE: from subject
-            
-        if ( str(subject[:len(addLabel)]).lower() != str(addLabel).lower()): #If it is equal then there is nothing to change with the subject
-            subject = (addLabel + ' ' + subject) #Set the new subject
-
-        maxLength = safeConfigGetString(toAddress[3:],'maxlength')
-        
-        if (str(maxLength) != ''): #If it is null then no maximum length. 
-            if (len(message) > int(maxLength)): #Truncates the message if it is too long
-                message = (message[:int(maxLength)] + '... Truncated.\n')
-                
-        if (len(subject) > int(500)): #Truncates the subject if over 500 characters
-                subject = (subject[:int(500)] + '... Truncated.\n')
-                
-        message = strftime("%a, %Y-%m-%d %H:%M:%S UTC",gmtime()) + '   Message ostensibly from ' + str(fromAddress) + ':\n\n' + str(message) #adds the message ostensibly from text.
-
-        print 'Message built, ready to send. Sending...'
-        
-        message = message.encode('base64') #Encode the message.
-        subject = subject.encode('base64')
-        api.sendBroadcast(toAddress,subject,message) #Build the message and send it
-        print 'Sent.'
-
-
-
-def main():
-    arg = sys.argv[1]
-        
-    if arg == "startingUp":
-        sys.exit() #No action
-                                              
-    elif arg == "newMessage":
-        processMsg() #Start Moderation
-        print 'Done.'
-        sys.exit() #Done, exit
-        
-    elif arg == "newBroadcast":
-        sys.exit()#No action
-                                              
-    elif arg == "initalize":
-        initConfig()
-        sys.exit()#No action
-
+        label,enabled,motd,whitelisted,max_msg_length,echo_address = ('no label','enabled','','false','0','false')
     else:
-        #assert False, "unhandled option"
-        sys.exit() #Not a relevant argument, exit
+        label,enabled,motd,whitelisted,max_msg_length,echo_address = temp
+
+    cur.close
+    return label,enabled,motd,whitelisted,max_msg_length,echo_address
+
+def banned_text(con,string_text):
+    # Returns True if passed text is in the filter table
+    cur = con.cursor()
+    cur.execute("SELECT banned_text FROM filter")
+    temp = cur.fetchone()
+    while True:
+        if temp == None or temp == '':
+            break
+        else:
+            filtered_text = str(temp)
+
+            if (filtered_text in string_text):
+                cur.close()
+                return True
+            
+    cur.close()
+    return False
+
+def check_if_new_msg(con):
+    # Returns true if there are messages in the inbox
+    api = xmlrpclib.ServerProxy(api_data(con))
+    inboxMessages = json.loads(api.getAllInboxMessages())
+    numMessages = len(inboxMessages['inboxMessages'])
+
+    if numMessages == 0:
+        return False
+    else:
+        return True
+
+def process_new_message(con):
+    try:
+        api = xmlrpclib.ServerProxy(api_data(con))
+        inboxMessages = json.loads(api.getAllInboxMessages())
+
+        oldesMessage = 0
         
-if __name__ =="__main__":
-    main()
+        fromAddress = str(inboxMessages['inboxMessages'][oldesMessage]['fromAddress'])
+        toAddress = str(inboxMessages['inboxMessages'][oldesMessage]['toAddress'])
+        message = str(inboxMessages['inboxMessages'][oldesMessage]['message'].decode('base64'))
+        subject = str(inboxMessages['inboxMessages'][oldesMessage]['subject'].decode('base64'))
+
+        # Delete messages 
+        msgId = inboxMessages['inboxMessages'][oldesMessage]['msgid']
+        api.trashMessage(msgId)
+        #sys.exit() # Temporary, used for dev
+        
+        if banned_text(con,message) == True:
+            print 'message contains banned text'
+            return None
+            
+        elif banned_text(con,subject) == True:
+            print 'subject contains banned text'
+            return None
+        else: 
+            
+            toAddress = format_address(toAddress)
+            fromAddress = format_address(fromAddress)
+            
+            return toAddress,fromAddress,message,subject
+
+    except Exception,e:
+        print 'process_new_message ERROR: ',e
+        return None
+        
+def is_address(bm_address):
+    if decodeAddress(bm_address) == True:
+        return True
+    else:
+        return False
+
+def nick_taken(con,ident_address,nickname):
+    # Returns True if a nickname is already taken
+    cur = con.cursor()
+    cur.execute("SELECT id,ident_bm_address FROM users_config WHERE nickname=?",[str(nickname),])
+    while True:
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            return False
+        else:
+            id_num,ident_bm_address = temp
+            
+            if ident_bm_address == ident_address:
+                return True
+
+def generateAddress(con,label=None):
+    api = xmlrpclib.ServerProxy(api_data(con))
+    if label == None:
+        label = 'bmModerator'
+
+    label = label.encode('base64')
+    
+    generatedAddress = api.createRandomAddress(label)
+    generatedAddress = format_address(generatedAddress)
+    return generatedAddress
+
+def initalize_user(con,ident_bm_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_bm_address = format_address(ident_bm_address)
+    
+    cur = con.cursor()
+    cur.execute("INSERT INTO users_config VALUES(?,?,?,?,?,?)",(None,ident_bm_address,usr_bm_address,'','',''))
+    con.commit()
+    
+    cur.execute("SELECT id,ident_bm_address FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+    while True:
+        temp = cur.fetchone()
+
+        if temp == None or temp == '':
+            print 'initalize_user ERROR'
+            break
+        else:
+            id_num,ident_address = temp
+
+            if ident_address == ident_bm_address:
+                return id_num
+
+def setNick(con,ident_address,usr_bm_address,nickname):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if (len(nickname) <= 32):
+        if (not nick_taken(con,ident_address,nickname) or is_moderator(con,usr_bm_address) or is_admin(con,usr_bm_address) or is_global_admin(con,usr_bm_address)): #If not taken and not an admin/global_admin
+            cur.execute("SELECT id,ident_bm_address FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+            while True:
+                temp = cur.fetchone()
+
+                if temp == None or temp == '':
+                    id_num = initalize_user(con,ident_address,usr_bm_address)               
+                    cur.execute("UPDATE users_config SET nickname=? WHERE id=?",[nickname,id_num])
+                    con.commit
+                    break
+                    
+                else:
+                    id_num,ident = temp
+
+                    if ident == ident_address:              
+                        cur.execute("UPDATE users_config SET nickname=? WHERE id=?",[nickname,id_num])
+                        con.commit
+                        break
+                         
+            new_message = 'Nickname successfully changed to (%s).' % str(nickname)
+        else:
+            new_message = 'Nickname already taken.'
+    else:
+        new_message = 'Nickname too long. Maximum Nickname Size: 32 Characters'
+    return new_message
+
+def addWhiteList(con,ident_address,usr_bm_address,new_subject):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['whitelisted',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['whitelisted',id_num])
+                    con.commit
+                    break
+                    
+        new_message = 'BM-%s successfully whitelisted. An automatic message was sent to alert them.' % usr_bm_address
+        tmp_msg = 'This address has been whitelisted for: %s' % ident_address
+        send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def remWhiteList(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['',id_num])
+                    con.commit
+                    break
+                    
+        new_message = 'BM-%s successfully removed from whitelist.' % usr_bm_address
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def addBlackList(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['blacklisted',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+                if ident_bm_address == ident_address:
+                    cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['blacklisted',id_num])
+                    con.commit
+                    break
+                    
+        new_message = 'BM-%s successfully blacklisted.' % usr_bm_address
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def remBlackList(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['',id_num])
+                    con.commit
+                    break
+                    
+        new_message = 'BM-%s successfully removed from blacklist.' % usr_bm_address
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def inviteUser(con,ident_address,usr_bm_address,new_subject):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['invited',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET whitelisted_blacklisted=? WHERE id=?",['invited',id_num])
+                    con.commit
+                    break
+                    
+        new_message = 'BM-%s successfully invited to join this address.' % usr_bm_address
+        tmp_msg = 'This address has been invited by BM-%s to join: BM-%s. Respond with "Accept" as the subject to accept this invitation.' % (usr_bm_address,ident_address)
+        send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def addModerator(con,ident_address,usr_bm_address,new_subject):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,admin_moderator FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['moderator',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,admin_moderator = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['moderator',id_num])
+                    con.commit
+                    break
+                    
+        new_message = 'BM-%s successfully added to moderators. A notice was automatically sent to notify them.' % usr_bm_address
+        tmp_msg = 'This address has been added to the Moderator group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (usr_bm_address,ident_address)
+        send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def remModerator(con,ident_address,usr_bm_address): 
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,admin_moderator FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,admin_moderator = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['',id_num])
+                    con.commit
+                    break
+                    
+        
+        new_message = 'BM-%s successfully removed from moderators.' % usr_bm_address
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
+
+    return new_message
+
+def addAdmin(con,ident_address,usr_bm_address,new_subject): 
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()    
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,admin_moderator FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['admin',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,admin_moderator = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['admin',id_num])
+                    con.commit
+                    break
+        
+        new_message = 'BM-%s successfully added to admins. A notice was automatically sent to notify them.' % usr_bm_address
+        tmp_msg = 'This address has been added to the Admin group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (usr_bm_address,ident_address)
+        send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % bm_address
+
+    return new_message
+
+def remAdmin(con,ident_address,usr_bm_address): 
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,admin_moderator FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,admin_moderator = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['',id_num])
+                    con.commit
+                    break
+                    
+        
+        new_message = 'BM-%s successfully removed from moderators.' % bm_address
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % bm_address
+
+    return new_message
+
+def ln_brk():
+    # Returns line break for use in Bitmessage Messages. There is probably a better way to do this but whatever.
+    line_break = '''
+'''
+    return line_break
+
+def listModerators(con,ident_address):
+    try:
+        ident_address = format_address(ident_address)
+        new_message = '----- List of Moderators -----'
+        cur = con.cursor()
+        cur.execute("SELECT usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted FROM users_config WHERE ident_bm_address=?",[ident_address,])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                new_message += ln_brk() + '----- End -----'
+                break
+            else:
+                usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted = temp
+
+                if admin_moderator == 'moderator':
+                    whitelisted = 'False'
+                    blacklisted = 'False'
+                    
+                    if whitelisted_blacklisted == 'blacklisted':
+                        blacklisted = 'True'
+                    elif whitelisted_blacklisted == 'whitelisted':
+                        whitelisted = 'True'
+
+                    new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
+        return new_message
+    except Exception,e:
+        print 'listAdmins ERROR: ',e
+
+def listAdmins(con,ident_address):
+    try:
+        ident_address = format_address(ident_address)
+        new_message = '----- List of Administrators -----'
+        cur = con.cursor()
+        cur.execute("SELECT usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted FROM users_config WHERE ident_bm_address=?",[ident_address,])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                new_message += ln_brk() + '----- End -----'
+                break
+            else:
+                usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted = temp
+
+                if admin_moderator == 'admin':
+                    whitelisted = 'False'
+                    blacklisted = 'False'
+                    
+                    if whitelisted_blacklisted == 'blacklisted':
+                        blacklisted = 'True'
+                    elif whitelisted_blacklisted == 'whitelisted':
+                        whitelisted = 'True'
+
+                    new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
+        return new_message
+    except Exception,e:
+        print 'listAdmins ERROR: ',e
+        
+def listUsers(con,ident_address):
+    try:
+        ident_address = format_address(ident_address)
+        new_message = '----- List of Users -----'
+        cur = con.cursor()
+        cur.execute("SELECT usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted FROM users_config WHERE ident_bm_address=?",[ident_address,])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                new_message += ln_brk() + '----- End -----'
+                break
+            else:
+                usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted = temp
+
+                # List everything except admins or moderators, global user (owner) is in a different table.
+                if admin_moderator != 'admin' and admin_moderator != 'moderator':
+                    whitelisted = 'False'
+                    blacklisted = 'False'
+                    
+                    if whitelisted_blacklisted == 'blacklisted':
+                        blacklisted = 'True'
+                    elif whitelisted_blacklisted == 'whitelisted':
+                        whitelisted = 'True'
+
+                    new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
+        return new_message
+    except Exception,e:
+        print 'listUsers ERROR: ',e
+        
+def getStats(con,ident_address,time_period):
+    cur = con.cursor()
+    
+    time_period = time_period.strip()
+    time_period = time_period.lower()
+    
+    if time_period == 'day':
+        date_time = strftime("%Y-%m-%d",gmtime())
+    elif time_period == 'month':
+        date_time = strftime("%Y-%m",gmtime())
+    elif time_period == 'year':
+        date_time = strftime("%Y",gmtime())
+    else:
+        date_time = 'forever'
+        
+    total_messages = 0
+    total_broadcasts = 0
+
+    new_message = '----- Message and Broadcast Statistics for %s UTC/GMT -----' % date_time
+        
+    cur.execute('SELECT date_day,num_sent_broadcasts,num_sent_messages FROM stats WHERE bm_address=?' ,[ident_address,])
+    while True:
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            new_message += ln_brk() + '----- Total Messages:%s | Total Broadcasts:%s -----' % (str(total_messages),str(total_broadcasts))
+            break
+        else:
+            date_day,num_sent_broadcasts,num_sent_messages = temp
+            if (str(date_day[:len(date_time)]) == date_time) or (date_time == 'forever'):
+                total_messages += num_sent_messages
+                total_broadcasts += num_sent_broadcasts
+                new_message += ln_brk() + '%s | Messages:%s | Broadcasts:%s' % (str(date_day),str(num_sent_broadcasts),str(num_sent_messages))
+    return new_message
+
+def getCommandHistory(con,ident_address):
+    cur = con.cursor()
+
+    new_message = '----- Command History -----'
+    cur.execute('SELECT usr_bm_address,date_time,command,message_snippet FROM command_history WHERE ident_bm_address=?' ,[ident_address,])
+    while True:
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            new_message += ln_brk() + '----- End -----'
+            break
+        else:
+            usr_bm_address,date_time,command,message_snippet = temp
+            new_message += ln_brk() + 'BM-%s | %s | Command:%s | Message Snippet:%s' % (str(usr_bm_address),str(date_time),str(command),str(message_snippet))
+            
+    return new_message
+    
+def perform_command(con,ident_address,usr_bm_address,message,subject):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    try:
+        cur = con.cursor()
+        command = (subject.lower()).strip()
+
+        message = str(message)
+        subject = str(subject)
+
+        if is_global_admin(con,usr_bm_address):
+            usr_access_level = 3
+        elif is_admin(con,ident_address,usr_bm_address):
+            usr_access_level = 2
+        elif is_moderator(con,ident_address,usr_bm_address):
+            usr_access_level = 1
+        else:
+            # Everyone has level 0 access
+            usr_access_level = 0
+
+        # Log command
+        date_time = strftime("%Y-%m-%d:%H",gmtime())
+        message_snippet = message.strip()
+        message_snippet = message_snippet[:64] #only take the first X number of characters
+        cur.execute('INSERT INTO command_history VALUES(?,?,?,?,?,?)', [None,ident_address,usr_bm_address,date_time,command,message_snippet])
+        con.commit()
+            
+        new_subject = '[BM-MODERATOR]'
+        new_message = ''
+
+        cmd_failed = False
+        
+        if (command == '--setnick' or command == '--setnickname') and usr_access_level >= 0: #Anyone can do this
+            # TODO, check to make sure nick isn't already taken
+            # TODO, add clearnick to allow moderators/admins to clear nicknames for addresses
+            new_message = setNick(con,ident_address,usr_bm_address,message)
+
+        elif command == '--help' and usr_access_level > 0:
+            if is_global_admin(con,usr_bm_address):
+                new_message = 'Your Access Level is: Owner'
+                new_message += ln_brk()
+            elif is_admin(con,ident_address,usr_bm_address):
+                new_message = 'Your Access Level is: Admin'
+            elif is_moderator(con,ident_address,usr_bm_address):
+                new_message = 'Your Access Level is: Moderator'
+            else:
+                new_message = 'Your Access Level is: User'
+            
+            new_message += ln_brk() + help_file()
+
+        elif command == '--addwhitelist' and usr_access_level > 0:
+            new_message = addWhiteList(con,ident_address,message,new_subject)
+
+        elif command == '--remwhitelist' and usr_access_level > 0:
+            new_message = remWhiteList(con,ident_address,message)
+
+        elif command == '--addblacklist' and usr_access_level > 0:
+            new_message = addBlackList(con,ident_address,message)
+
+        elif command == '--remblacklist' and usr_access_level > 0:
+            new_message = remBlackList(con,ident_address,message)
+
+        elif command == '--inviteuser' and usr_access_level > 0:
+            new_message = inviteUser(con,ident_address,message,new_subject)
+
+        elif command == '--addfilter' and usr_access_level > 0:
+            cur.execute('INSERT INTO filter VALUES(?,?)', [None,str(message)])
+            new_message = 'Message added to filter list. Any message, to any address on this server, with this text in it will be deleted and no other actions taken.'
+
+        elif command == '--clearfilters' and usr_access_level > 0:
+            # TODO, add ability to list current filters and delete individual ones?
+            cur.execute("DROP TABLE IF EXISTS filter")
+            cur.execute("CREATE TABLE filter(id INTEGER PRIMARY KEY, banned_text TEXT)")
+            new_message = 'All filters have been cleared.'
+            
+        elif command == '--setlabel' and usr_access_level > 1:
+            tmp_label = str(message)
+            cur.execute("UPDATE bm_addresses_config SET label=? WHERE bm_address=?",[tmp_label,ident_address])
+            new_message = 'Address Label successfully set to [%s].' % tmp_label
+            
+        elif command == '--setmotd' and usr_access_level > 1:
+            tmp_motd = str(message)
+            cur.execute("UPDATE bm_addresses_config SET motd=? WHERE bm_address=?",[tmp_motd,ident_address])
+            new_message = 'Message Of The Day successfully set to (%s).' % tmp_motd
+            
+        elif command == '--addmoderator' and usr_access_level > 1:
+            new_message = addModerator(con,ident_address,message,new_subject)
+            
+        elif command == '--remmoderator' and usr_access_level > 1:   
+            new_message = remModerator(con,ident_address,message)
+            
+        elif command == '--addadmin' and usr_access_level > 2:
+            new_message = addAdmin(con,ident_address,message,new_subject)
+            
+        elif command == '--remadmin' and usr_access_level > 2:  
+            new_message = remAdmin(con,ident_address,message)
+
+        elif command == '--sendbroadcast' and usr_access_level > 1:
+            send_broadcast(con,ident_address,new_subject,message)
+
+        elif command == '--listmoderators' and usr_access_level > 1:
+            new_message = listModerators(con,ident_address)
+            
+        elif command == '--listadmins' and usr_access_level > 2:
+            new_message = listAdmins(con,ident_address)
+            
+        elif command == '--listusers' and usr_access_level > 1:
+            new_message = listUsers(con,ident_address)
+            
+        elif command == '--setmailinglist' and usr_access_level > 2:
+            cur.execute("UPDATE bm_addresses_config SET echo_address=? WHERE bm_address=?",['false',ident_address])
+            new_message = 'Address set as a Mailing List. It will now broadcast messages that are sent to it.'
+
+        elif command == '--setecho' and usr_access_level > 2:
+            cur.execute("UPDATE bm_addresses_config SET echo_address=? WHERE bm_address=?",['true',ident_address])
+            new_message = 'Address set as an Echo Address. It will now reply to all messages sent to it.'
+
+        elif command == '--setblacklist' and usr_access_level > 2:
+            cur.execute("UPDATE bm_addresses_config SET whitelisted=? WHERE bm_address=?",['false',ident_address])
+            new_message = 'Address Blacklisted. Anyone that has not been Blacklisted can use this address.'
+
+        elif command == '--setwhitelist' and usr_access_level > 2:
+            cur.execute("UPDATE bm_addresses_config SET whitelisted=? WHERE bm_address=?",['true',ident_address])
+            new_message = 'Address Whitelisted. Only Whitelisted users will be able to use this address. Use "--inviteUser" to invite new users.'
+
+        elif command == '--setmaxlength' and usr_access_level > 1:
+            message = message.lower()
+            message = message.strip()
+            if is_int(message):
+                cur.execute("UPDATE bm_addresses_config SET max_msg_length=? WHERE bm_address=?",[int(message),ident_address])
+                new_message = 'Maximum message length successfully changed to %s characters. Messages longer than this will be truncated.' % message
+            else:
+                cmd_failed == True
+
+        elif command == '--enable' and usr_access_level > 1:
+            cur.execute("UPDATE bm_addresses_config SET enabled=? WHERE bm_address=?",['true',ident_address])
+            new_message = 'Address enabled.'
+
+        elif command == '--disable' and usr_access_level > 1:
+            cur.execute("UPDATE bm_addresses_config SET enabled=? WHERE bm_address=?",['false',ident_address])
+            new_message = 'Address disabled. NOTE: Admins and Moderators will still be able to perform commands.'
+
+        elif command == '--generatenewaddress' and usr_access_level > 2:
+            if message != '':
+                if len(message) <= 32:
+                    tmp_label = str(message)
+                    new_address = generateAddress(con,tmp_label)
+                    new_address = new_address[3:]
+                    new_message = 'Address (BM-%s) successfully generated with Label (%s)' % (new_address,tmp_label)
+                else:
+                    new_address =  generateAddress(con)
+                    new_address = new_address[3:]
+                    tmp_label = 'no label'
+                    new_message = 'Label too long (Max 32). Address (BM-%s) successfully generated with default Label (%s)' % (new_address,tmp_label)
+            else:
+                new_address =  generateAddress(con)
+                new_address = new_address[3:]
+                tmp_label = 'no label'
+                new_message = 'No Label specified. Address (BM-%s) successfully generated with default Label (%s)' % (new_address,tmp_label)
+
+            # Initalize address in database
+            throwAway = get_bm_ident_info(con,ident_address)
+            
+            cur.execute("UPDATE bm_addresses_config SET label=? WHERE bm_address=?",[tmp_label,ident_address])
+            con.commit()
+            
+            throwAway = addAdmin(con,new_address,usr_bm_address,new_subject)
+            
+        elif command == '--getstats' and usr_access_level > 1:
+            new_message = getStats(con,ident_address,message)
+            
+        elif command == '--getcommandhistory' and usr_access_level > 1:
+            new_message = getCommandHistory(con,ident_address)
+            
+        elif usr_access_level > 0:
+            new_message = 'Unknown command: %s' % str(subject)
+            # Note: user with access level 0 will not get a reply. This prevents a DOS attack vector.
+        con.commit()
+        
+        if cmd_failed == True:
+            new_message = 'Command failed. (%s) (%s)' %(subject,message)
+            
+        if new_message != '':
+            send_message(con,usr_bm_address,ident_address,new_subject,new_message)
+            
+    except Exception,e:
+        print 'perform_command ERROR: ',e
+
+def echo(con,myAddress,replyAddress,message,subject):
+    try:
+        api = xmlrpclib.ServerProxy(api_data(con))
+
+        temp = get_bm_ident_info(con, myAddress)
+        if temp == None:
+            print 'echo error, no data'
+            return None
+
+        label,enabled,motd,whitelisted,max_msg_length,echo_address = temp
+
+        subject = subject.lstrip() # Removes prefix white spaces
+
+        if (len(subject) > 32): #Truncates the subject if it is too long
+            subject = (subject[:32] + '... Truncated')
+
+        #if (str(subject[:len(label)+1]) != '%s:' % label):
+        #    subject = '%s: %s'% (label,subject) #only adds prefix if not already there
+        
+        if (len(message) > int(max_msg_length)) and (str(max_msg_length) != '0'): #Truncates the message if it is too long
+            message = (message[:int(max_msg_length)] + '... Truncated to %s characters.\n' % max_msg_length)
+        
+        echoMessage = ('Message successfully received at ' + strftime("%Y-%m-%d %H:%M:%S",gmtime()) + ' UTC/GMT.\n' + '-------------------------------------------------------------------------------\n' + message + '\n\n\n' + str(motd))
+
+        send_message(con,replyAddress,myAddress,subject,echoMessage)
+    except Exception,e:
+        print 'echo ERROR: ',e
+
+def mailing_list(con,myAddress,replyAddress,message,subject):
+    try:
+        cur = con.cursor()
+
+        temp = get_bm_ident_info(con, myAddress) #Get info about the address it was sent to(our address)
+        if temp == None:
+            print 'mailing_list error, no data'
+            return None
+
+        label,enabled,motd,whitelisted,max_msg_length,echo_address = temp
+        #only label,motd,and max_msg_length used here
+        max_msg_length = int(max_msg_length)
+
+        subject = subject.lstrip() #Removes left spaces
+
+        if (len(subject) > 64): #Truncates the subject if it is too long
+            subject = (subject[:64] + '...')
+            
+        if (str((subject[:3]).lower()) == 're:'):
+                subject = subject[3:] #Removes re: or RE: from subject
+                
+        subject = subject.lstrip() #Removes left spaces
+                
+        if (str(subject[:len(label)+2]) == '[%s]'% label):
+            subject = subject[len(label)+2:] #Removes label
+
+        subject = subject.lstrip() #Removes left spaces
+            
+        subject = '[%s] %s'% (label,subject)
+        
+        if (len(message) > max_msg_length) and (str(max_msg_length) != '0'): #Truncates the message if it is too long
+            message = (message[:max_msg_length] + '... Truncated to %s characters.\n' % max_msg_length)
+
+
+        #Get nickname
+        cur.execute("SELECT ident_bm_address,nickname FROM users_config WHERE usr_bm_address=?",[replyAddress])
+        while True:
+            temp = cur.fetchone()
+            if temp == None or temp == '':
+                nickname = 'anonymous'
+                break
+            else:
+                ident_address,nickname = temp
+
+                if ident_address == myAddress:
+                    if nickname == None or nickname == '':                        
+                        nickname = 'anonymous'
+                    else:
+                        nickname = str(nickname)
+                        
+                    break     
+
+        message = strftime("%a, %Y-%m-%d %H:%M:%S UTC",gmtime()) + '   Message ostensibly from BM-%s (%s):\n%s\n\n%s' % (replyAddress,nickname,motd,message) 
+
+        send_broadcast(con,myAddress,subject,message) #Build the message and send it
+    except Exception,e:
+        print 'mailing_list ERROR: ',e
+
+def send_message(con,to_address,from_address,subject,message):
+    try:
+        api = xmlrpclib.ServerProxy(api_data(con)) #Connect to BitMessage
+        subject = subject.encode('base64') #Encode the subject
+        message = message.encode('base64') #Encode the message.
+        api.sendMessage(to_address,from_address,subject,message) #Build the message and send it
+
+        #Add to daily stats
+        date_day = strftime("%Y-%m-%d",gmtime())
+        cur = con.cursor()
+        #num_sent_broadcasts,num_sent_messages
+        cur.execute('SELECT id,bm_address,num_sent_messages FROM stats WHERE date_day=?' ,[date_day,])
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            #Inserting new day
+            cur.execute('INSERT INTO stats VALUES(?,?,?,?,?)', [None,date_day,from_address,0,1])
+        else:
+            id_num,bm_address,num_sent_messages = temp
+            if bm_address == from_address:
+                num_sent_messages += 1
+                cur.execute("UPDATE stats SET num_sent_messages=? WHERE id=?", (num_sent_messages,id_num))
+        con.commit()
+
+        print 'Message sent'
+    except Exception,e:
+        print 'send_message ERROR: ',e
+
+def send_broadcast(con,broadcast_address,subject,message):
+    try:
+        api = xmlrpclib.ServerProxy(api_data(con)) #Connect to BitMessage
+        subject = subject.encode('base64') #Encode the subject
+        message = message.encode('base64') #Encode the message.
+        api.sendBroadcast(broadcast_address,subject,message) #Build the broadcast and send it
+
+        #Add to daily stats
+        date_day = strftime("%Y-%m-%d",gmtime())
+        cur = con.cursor()
+        #num_sent_broadcasts,num_sent_messages
+        cur.execute('SELECT id,bm_address,num_sent_broadcasts FROM stats WHERE date_day=?' ,[date_day,])
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            #Inserting new day
+            cur.execute('INSERT INTO stats VALUES(?,?,?,?,?)', [None,date_day,broadcast_address,1,0])
+        else:
+            id_num,bm_address,num_sent_broadcasts = temp
+            if bm_address == broadcast_address:
+                num_sent_broadcasts += 1
+                cur.execute("UPDATE stats SET num_sent_broadcasts=? WHERE id=?", (num_sent_broadcasts,id_num))
+        con.commit()
+
+
+        print 'Broadcast sent'
+    except Exception,e:
+        print 'send_broadcast ERROR: ',e
+
+def accept_invite(con,ident_address,usr_bm_address,subject):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+
+    subject = str(subject).lower()
+    subject = subject.lstrip()
+    
+    if 'accept' in subject:
+        cur = con.cursor()
+        if is_address(usr_bm_address):
+            cur.execute("SELECT id,ident_bm_address,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+            while True:
+                temp = cur.fetchone()
+
+                if temp == None or temp == '':
+                    return False
+                else:
+                    id_num,ident_bm_address,whitelisted_blacklisted = temp
+
+                    if ident_bm_address == ident_address and whitelisted_blacklisted == 'invited':
+                        addWhiteList(con,ident_address,usr_bm_address,'[BM-Moderator]')
+                        return True
+    else:
+        return False
+
+def main_loop():
+    print 'bmModerator - Starting up main loop in 10 seconds.'
+    time.sleep(10) # Sleep to allow bitmessage to start up
+    con = lite.connect(database) #Only connects to database when needed
+    while True:
+        try:
+            #Check if messages in inbox
+            if check_if_new_msg(con) == True:
+                print 'Message found. Processing'
+                temp = process_new_message(con)
+                if temp == None:
+                    print 'No actions'
+                    pass #Perform no actions
+                else:
+                    toAddress,fromAddress,message,subject = temp
+                    
+                    if is_blacklisted(con,toAddress,fromAddress): #check if address is blacklisted
+                        print 'Blacklisted User'
+                        pass #Perform no actions
+                    elif is_command(subject): #check if a command is being attempted
+                        print 'Command discovered: ',str(subject)
+                        throwAway = get_bm_ident_info(con,toAddress)
+                        #Initalize address if not already done. throwAway variable is not used                                                      
+                        perform_command(con,toAddress,fromAddress,message,subject) #Performs command actions and sends necessary broadcast/message
+                    else:
+                        print 'Other discovered'
+                        temp2 = get_bm_ident_info(con,toAddress) #Get info about the address it was sent to(our address)
+                        if temp2 != None:
+                            label,enabled,motd,whitelisted,max_msg_length,echo_address = temp2
+                            
+                            if accept_invite(con,toAddress,fromAddress,subject):
+                                print 'Accepting invite'
+                                tmp_msg = 'Congratulations, you have been added to this address. You can set your nickname by replying with Subject:"--setNick" and Message:"Your Nickname"' % (usr_bm_address,ident_address)
+                                send_message(con,fromAddress,toAddress,'[BM-MODERATOR]',tmp_msg)
+                            elif (str(enabled).lower() != 'false'): 
+                                #Determine permissions of ident address and user address
+                                if (str(whitelisted).lower() != 'true'):
+                                    performAction = True
+                                elif (str(whitelisted).lower() == 'true' and is_whitelisted(con,toAddress,fromAddress) == True):
+                                    performAction = True
+                                elif is_global_admin(con,fromAddress):
+                                    performAction = True
+                                elif is_admin(con,toAddress,fromAddress):
+                                    performAction = True
+                                elif is_moderator(con,toAddress,fromAddress):
+                                    performAction = True
+                                else:
+                                    performAction = False
+                                    
+                                if performAction == True:
+                                    if str(echo_address).lower() == 'true':
+                                        print 'Echo'
+                                        echo(con,toAddress,fromAddress,message,subject)
+                                    else:
+                                        print 'Mailing List'
+                                        mailing_list(con,toAddress,fromAddress,message,subject)
+                                else:
+                                    print 'Insufficient Privileges'
+                print 'Finished with Message.'
+
+            #Check again, this time to determine sleep time and whether or not to close the database connection
+            if check_if_new_msg(con) == True: 
+                print 'sleep 1'
+                time.sleep(1) #How often to loop when there are messages
+            else:
+                #print 'sleep 15'
+                time.sleep(15) #How often to run the loop on no msg
+
+            #break #FOR TESTING, ONLY RUNS THROUGH ONCE
+        except Exception,e:
+            print 'main_loop ERROR: ',e
+            print 'sleep 30'
+            time.sleep(30)
+    con.close() #Close connection since there are no more messages
+
+def initConfig():
+    print '-Initalizing Moderator-\n'
+
+    print 'Would you like to (I)nitalize the application, update the (A)PI info, (S)et the global administrator, or (G)enerate a new random identity?(I/A/S/G)'
+    uInput = raw_input('> ')
+    if uInput.lower() == 'i':
+        print 'Any existing databases will be deleted. Are you sure that you want to continue?(Y/N)'
+        uInput = raw_input('> ')
+        if uInput.lower() == 'y':
+            create_db()
+            print 'Databases Created'
+        else:
+            print '-Aborted-\n'
+            return ''
+    
+    elif uInput.lower() == 'a':
+        con = lite.connect(database) 
+        cur = con.cursor()
+        
+        print "Please enter the following API Information\n"
+        api_port = raw_input('API Port> ')
+        api_address = raw_input('API Address> ')
+        api_username = raw_input('API username> ')
+        api_password = raw_input('API Password> ')
+
+        api_port = str(api_port)
+        api_address = str(api_address)
+        api_username = str(api_username)
+        api_password  = str(api_password)
+        
+        cur.execute("UPDATE api_config SET api_port=? WHERE id=?",(api_port,0))
+        cur.execute("UPDATE api_config SET api_address=? WHERE id=?",(api_address,0))
+        cur.execute("UPDATE api_config SET api_username=? WHERE id=?",(api_username,0))
+        cur.execute("UPDATE api_config SET api_password=? WHERE id=?",(api_password,0))
+        print '\nSuccessfully updated API information.'
+        print 'Please setup the apinotifypath through Bitmessage if you have not already.'
+        print 'Please setup a Global Administrator if you have not already.\n'
+
+        con.commit()
+        cur.close()
+        con.close()
+        
+    elif uInput.lower() == 's':
+        while True:
+            print "Please enter the Gloabl Administrator's Bitmessage Address"
+            uInput = raw_input('> ')
+
+            if is_address(uInput):
+                bm_address = uInput
+                
+                if bm_address[:3].lower() == 'bm-':
+                    bm_address = bm_address[3:] #remove BM- prefix
+                    
+                con = lite.connect(database) 
+                cur = con.cursor()
+                cur.execute("UPDATE api_config SET global_admin_bm_address=? WHERE id=?",(bm_address,0))
+                print 'Global Admin successfully changed. This address can perform "Owner" commands.'
+                con.commit()
+                cur.close()
+                con.close()
+                break
+            else:
+                print 'Invalid address. Try again'
+    
+    elif uInput.lower() == 'g': #Generate new address
+        con = lite.connect(database)  
+        cur = con.cursor()
+        the_address = generateAddress(con)
+        if decodeAddress(the_address) == True:
+            #Let's alert the global admin. Find address if it exists
+            cur.execute("SELECT global_admin_bm_address FROM api_config WHERE id=?",('0',))
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                print '\nAddress Generated (BM-%s)\n' % the_address
+                print 'Global Admin not set. Auto-Notification not sent.'
+                pass #Address not entered
+            else:
+                global_admin_bm_address = str(temp[0])
+                addAdmin(con,the_address,global_admin_bm_address,'[BM-Moderator]')
+            print '\nAddress Generated (BM-%s) and Global Admin (BM-%s) notified.' % (the_address,global_admin_bm_address)
+        else:
+            print 'ERROR generating address: ', the_address
+
+        cur.close()
+        
+    print 'Finished\n'
+            
+def main():
+    try:
+        arg = sys.argv[1]
+            
+        if arg == "startingUp":
+            main_loop()
+            sys.exit() #No action
+                                                  
+        elif arg == "newMessage":
+            #TODO, check if process already running, if not, start
+            # - This could be used in the event of this process stopping for an unknown reason
+            sys.exit() #No action
+            
+        elif arg == "newBroadcast":
+            sys.exit()#No action
+                                                  
+        elif arg == "initalize":
+            initConfig()
+            sys.exit()#No action
+            
+        elif arg == "apiTest":
+            pass
+            #TODO, add apiTest function
+        else:
+            print 'unknown command'
+            #assert False, "unhandled option"
+            sys.exit() #Not a relevant argument, exit
+    except Exception,e:
+        print e
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (IOError, SystemExit):
+        raise
+    except KeyboardInterrupt:
+        print ("Crtl+C Pressed. Shutting down.")
