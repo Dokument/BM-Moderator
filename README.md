@@ -39,46 +39,46 @@ Thanks,
 Help File
 ----------------------
 User Commands
---setNick               Sets your nickname. Max 32 characters
+ --setNick               Sets your nickname. Max 32 characters
 
 Moderator Commands
---Help                  This help file is sent to you as a message
---clearNick             Send nickname to remove or send address to remove nickname from.
---addWhitelist          Adds a user to the whitelist for this address
---remWhitelist          Removes a user from the blacklist for this address
---addBlacklist          Adds a user to the blacklist for this address
---remBlacklist          Removes a user from the blacklist for this address
---inviteUser            Sends an invitation to whitelist users for this address
---addFilter             Adds the message body to filter list. Essentially a spam list. Be careful with this
---listFilters           Lists all filters and their ID numbers. Use this ID to remove individual filters
---clearFilter           Send filter ID in message body. If empty body, all filters are cleared
+ --Help                  This help file is sent to you as a message
+ --clearNick             Send nickname to remove or send address to remove nickname from.
+ --addWhitelist          Adds a user to the whitelist for this address
+ --remWhitelist          Removes a user from the blacklist for this address
+ --addBlacklist          Adds a user to the blacklist for this address
+ --remBlacklist          Removes a user from the blacklist for this address
+ --inviteUser            Sends an invitation to whitelist users for this address
+ --addFilter             Adds the message body to filter list. Essentially a spam list. Be careful with this
+ --listFilters           Lists all filters and their ID numbers. Use this ID to remove individual filters
+ --clearFilter           Send filter ID in message body. If empty body, all filters are cleared
 
 Admin Commands
---setLabel              Sets the label for the mailing list
---setMOTD               Sets the message of the day
---addModerator          Adds a moderator to this address
---remModerator          Removes a moderator from this address
---sendBroadcast         Sends whatever message you type out as a broadcast from this addres
---listModerators        Returns a list of Moderators and their information
---listUsers             Returns a list of all non-Admin/Moderator users and their information
---enable                Enables a disabled address
---disable               Disable address. Prevents users from using it. Mods and Admins still have access
---setMaxLength          Messages exceeding the max length are truncated. Set 0 for no max length
---getStats              UTC times. Set period in message "Day"/"Month"/"Year" or "All" for all stats
---getCommandHistory     Returns a command history list including who, what, and when
+ --setLabel              Sets the label for the mailing list
+ --setMOTD               Sets the message of the day
+ --addModerator          Adds a moderator to this address
+ --remModerator          Removes a moderator from this address
+ --sendBroadcast         Sends whatever message you type out as a broadcast from this addres
+ --listModerators        Returns a list of Moderators and their information
+ --listUsers             Returns a list of all non-Admin/Moderator users and their information
+ --enable                Enables a disabled address
+ --disable               Disable address. Prevents users from using it. Mods and Admins still have access
+ --setMaxLength          Messages exceeding the max length are truncated. Set 0 for no max length
+ --getStats              UTC times. Set period in message "Day"/"Month"/"Year" or "All" for all stats
+ --getCommandHistory     Returns a command history list including who, what, and when
 
 Admin+ Commands
---addAdmin              Adds an admin for this address
---remAdmin              Removed an admin from this address
---listAdmins            Returns a list of Admins and their information
---setBlacklist          Anyone can use this address except for Blacklisted users.
---setWhitelist          Only Whitelisted users (or Moderators/Admins) can use this address
---setMailingList        Makes this address send a broadcast of all messages it receives
---setEcho               Makes this address reply to all messages it receives
+ --addAdmin              Adds an admin for this address
+ --remAdmin              Removed an admin from this address
+ --listAdmins            Returns a list of Admins and their information
+ --setBlacklist          Anyone can use this address except for Blacklisted users.
+ --setWhitelist          Only Whitelisted users (or Moderators/Admins) can use this address
+ --setMailingList        Makes this address send a broadcast of all messages it receives
+ --setEcho               Makes this address reply to all messages it receives
 
 Owner Commands
---addAdmin+             Adds an admin for this address
---remAdmin+             Removed an admin from this address
---listAdmin+            Returns a list of Admins and their information
---generateNewAddress    Returns a new address that can be used. Defaults to Mailing List. Message is Label
---getInfo               Lists all information about every address on this server
+ --addAdmin+             Adds an admin for this address
+ --remAdmin+             Removed an admin from this address
+ --listAdmin+            Returns a list of Admins and their information
+ --generateNewAddress    Returns a new address that can be used. Defaults to Mailing List. Message is Label
+ --getInfo               Lists all information about every address on this server
