@@ -174,6 +174,28 @@ def is_global_admin(con,usr_bm_address):
     else:
         return False
 
+def is_adminPlus(con,ident_address,usr_bm_address):
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+
+    cur = con.cursor()
+    cur.execute("SELECT id,ident_bm_address,admin_moderator,whitelisted_blacklisted FROM users_config WHERE usr_bm_address=?",[usr_bm_address,])
+    while True:
+        temp = cur.fetchone()
+
+        if temp == None or temp == '':
+            return False
+        else:
+            id_num,ident_bm_address,admin_moderator,whitelisted_blacklisted = temp
+
+            if ident_bm_address == ident_address:
+                if whitelisted_blacklisted == 'blacklisted':
+                    return False
+                elif admin_moderator == 'admin+':
+                    return True
+                else:
+                    return False
+
 def is_admin(con,ident_address,usr_bm_address):
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
@@ -265,13 +287,15 @@ User Commands
 
 Moderator Commands
 --Help                  This help file is sent to you as a message
+--clearNick             Send nickname to remove or send address to remove nickname from.
 --addWhitelist          Adds a user to the whitelist for this address
 --remWhitelist          Removes a user from the blacklist for this address
 --addBlacklist          Adds a user to the blacklist for this address
 --remBlacklist          Removes a user from the blacklist for this address
 --inviteUser            Sends an invitation to whitelist users for this address
---addFilter             Adds the message body to filter list. Essentially a spam list
---clearFilters          Deletes all filters. Useful if a filter is added that is blocking too much
+--addFilter             Adds the message body to filter list. Essentially a spam list. Be careful with this
+--listFilters           Lists all filters and their ID numbers. Use this ID to remove individual filters
+--clearFilter           Send filter ID in message body. If empty body, all filters are cleared
 
 Admin Commands
 --setLabel              Sets the label for the mailing list
@@ -287,15 +311,21 @@ Admin Commands
 --getStats              UTC times. Set period in message "Day"/"Month"/"Year" or "All" for all stats
 --getCommandHistory     Returns a command history list including who, what, and when
 
-Owner Commands
+Admin+ Commands
 --addAdmin              Adds an admin for this address
 --remAdmin              Removed an admin from this address
 --listAdmins            Returns a list of Admins and their information
---generateNewAddress    Returns a new address that can be used. Defaults to Mailing List
 --setBlacklist          Anyone can use this address except for Blacklisted users.
 --setWhitelist          Only Whitelisted users (or Moderators/Admins) can use this address
 --setMailingList        Makes this address send a broadcast of all messages it receives
 --setEcho               Makes this address reply to all messages it receives
+
+Owner Commands
+--addAdmin+             Adds an admin for this address
+--remAdmin+             Removed an admin from this address
+--listAdmin+            Returns a list of Admins and their information
+--generateNewAddress    Returns a new address that can be used. Defaults to Mailing List. Message is Label
+--getInfo               Lists all information about every address on this server
 
 Send all commands as the subject and all relevant data as the message (such as an address to blacklist)
 
@@ -312,23 +342,89 @@ Other Information:
     
 def is_command(text_string):
     # Returns true if the string is a command
-    command_list = ['--setNick','--setNickname','--Help','--addWhitelist','--remWhitelist','--addBlacklist','--remBlacklist','--inviteUser','--addFilter',
-                    '--clearFilters','--setLabel','--setMOTD','--addModerator','--remModerator','--addAdmin','--remAdmin','--sendBroadcast',
-                    '--listModerators','--listAdmins','--listUsers','--setMailingList','--setEcho','--setBlacklist','--setWhitelist','--setMaxLength',
-                    'enable','disable','--generateNewAddress','--getStats','--getCommandHistory']
+    command_list = ['--setNick','--setNickname','--Help','--clearNick','--addWhitelist','--remWhitelist','--addBlacklist','--remBlacklist','--inviteUser','--addFilter',
+                    '--listFilters','--clearFilter','--setLabel','--setMOTD','--addModerator','--remModerator','--addAdmin','--remAdmin','--listAdmins',
+                    '--sendBroadcast','--listModerators','--listUsers','--setMailingList','--setEcho','--setBlacklist','--setWhitelist','--setMaxLength',
+                    'enable','disable','--generateNewAddress','--getStats','--getCommandHistory','--getInfo','--addAdmin+','--remAdmin+','--listAdmin+']
 
     # Possible Future Commands
     # Use API to verify address
     # Set address difficulty on creation or after creation
-    # Ability to batch whitelist/blacklist/etc addresses? Reason not to, confirmation messages
+    # Ability to batch whitelist/blacklist/etc addresses? Reason not to, mass confirmation messages
     # Set max difficulty to send message, probably should be hard coded at least
-    # Get address information, enable status, whitelist status, admins mods and users, etc. all info, owner access only?
+    # TODO, don't allow moderators to perform actions on admins/admin+'s, etc
 
     for command in command_list:
         if command.lower() in text_string.lower():
             return True
 
-    return False    
+    return False
+
+def getInfo(con):
+    try:
+        cur = con.cursor()
+        date_time = strftime("%Y-%m-%d:%H",gmtime())
+        message = '%s Server Information' % date_time
+        message += ln_brk() + 50*"-" + ln_brk(2)
+        
+        cur.execute("SELECT id,bm_address FROM bm_addresses_config")
+        addressList = []
+        while True:
+            temp = cur.fetchone()
+            if temp == None or temp == '':
+                break
+            else:
+                addressList.append(temp[1])
+
+        for address in addressList:
+            label,enabled,motd,whitelisted,max_msg_length,echo_address = get_bm_ident_info(con,address)
+
+            if enabled == 'enabled':
+                enabled_result = 'True'
+            else:
+                enabled_result = 'False'
+
+            if echo_address == 'false':
+                echo_address_result = 'Mailing List'
+            else:
+                echo_address_result = 'Echo Address'
+
+            if whitelisted == 'false':
+                whitelisted_result = 'False'
+            else:
+                whitelisted_result = 'True'
+
+            if max_msg_length == '0':
+                max_msg_length_result = 'No Maximum'
+            else:
+                max_msg_length_result = str(max_msg_length)
+            
+            message += 'Address: %s' % str(address)
+            message += 'Label: %s' % label + ln_brk()
+            message += 'Enabled: %s' % enabled_result + ln_brk()
+            message += 'Type: %s' % echo_address_result + ln_brk()
+            message += 'Whitelisted: %s' % whitelisted_result + ln_brk()
+            message += 'Max Length: %s' % max_msg_length + ln_brk()
+            message += 'MOTD: %s' % motd + ln_brk()
+            message += ln_brk() 
+            message += listAdminPlus(con,address) + ln_brk(2)
+            message += listAdmins(con,address) + ln_brk(2)
+            message += listModerators(con,address) + ln_brk(2)
+            message += listUsers(con,address)
+            message += ln_brk(2)
+            message += getStats(con,address,'')
+            message += ln_brk(2)
+            message += getCommandHistory(con,address)
+            
+            message += ln_brk(2) + 50*"#" + ln_brk(2)
+            
+        message += '----- Global -----' + ln_brk()
+        message += listFilters(con)
+            
+        return message
+    except Exception,e:
+        print 'getInfo ERROR: ',e
+        return ''
 
 def get_bm_ident_info(con,ident_address):
     # Returns information about a bm address (an identity)
@@ -364,7 +460,6 @@ def banned_text(con,string_text):
             if (filtered_text in string_text):
                 cur.close()
                 return True
-            
     cur.close()
     return False
 
@@ -496,6 +591,48 @@ def setNick(con,ident_address,usr_bm_address,nickname):
             new_message = 'Nickname already taken.'
     else:
         new_message = 'Nickname too long. Maximum Nickname Size: 32 Characters'
+    return new_message
+
+def clearNick(con,ident_address,nick_or_address):
+    ident_address = format_address(ident_address)
+        
+    cur = con.cursor()
+    
+    if is_address(nick_or_address):
+        nick_or_address = format_address(nick_or_address)
+        cur.execute("SELECT id,ident_bm_address,nickname FROM users_config WHERE usr_bm_address=?",[nick_or_address])
+        while True:
+            temp = cur.fetchone()
+            if temp == None or temp == '':
+                new_message = 'No nickname found for user (%s).' % nick_or_address
+                break
+                
+            else:
+                id_num,ident_bm_address,nickname = temp
+
+                if ident_bm_address == ident_address:              
+                    cur.execute("UPDATE users_config SET nickname=? WHERE id=?",['',id_num])
+                    con.commit
+                    new_message = 'Nickname (%s) successfully removed for user (%s).' % (nickname,nick_or_address)
+                    break
+        
+    else:
+        cur.execute("SELECT id,ident_bm_address,usr_bm_address FROM users_config WHERE nickname=?",[nick_or_address])
+        while True:
+            temp = cur.fetchone()
+            if temp == None or temp == '':
+                new_message = 'No users found with nickname (%s).' % nick_or_address
+                break
+                
+            else:
+                id_num,ident_bm_address,usr_bm_address = temp
+
+                if ident_bm_address == ident_address:              
+                    cur.execute("UPDATE users_config SET nickname=? WHERE id=?",['',id_num])
+                    con.commit
+                    new_message = 'Nickname (%s) successfully removed for user (%s).' % (nick_or_address,usr_bm_address)
+                    break
+
     return new_message
 
 def addWhiteList(con,ident_address,usr_bm_address,new_subject):
@@ -678,36 +815,6 @@ def addModerator(con,ident_address,usr_bm_address,new_subject):
 
     return new_message
 
-def remModerator(con,ident_address,usr_bm_address): 
-    usr_bm_address = format_address(usr_bm_address)
-    ident_address = format_address(ident_address)
-    
-    cur = con.cursor()
-    if is_address(usr_bm_address):
-        cur.execute("SELECT id,ident_bm_address,admin_moderator FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
-        while True:
-            temp = cur.fetchone()
-
-            if temp == None or temp == '':
-                id_num = initalize_user(con,ident_address,usr_bm_address)               
-                cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['',id_num])
-                con.commit
-                break
-            else:
-                id_num,ident_bm_address,admin_moderator = temp
-
-                if ident_bm_address == ident_address:               
-                    cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['',id_num])
-                    con.commit
-                    break
-                    
-        
-        new_message = 'BM-%s successfully removed from moderators.' % usr_bm_address
-    else:
-        new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
-
-    return new_message
-
 def addAdmin(con,ident_address,usr_bm_address,new_subject): 
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
@@ -739,7 +846,39 @@ def addAdmin(con,ident_address,usr_bm_address,new_subject):
 
     return new_message
 
-def remAdmin(con,ident_address,usr_bm_address): 
+def addAdminPlus(con,ident_address,usr_bm_address,new_subject): 
+    usr_bm_address = format_address(usr_bm_address)
+    ident_address = format_address(ident_address)
+    
+    cur = con.cursor()    
+    if is_address(usr_bm_address):
+        cur.execute("SELECT id,ident_bm_address,admin_moderator FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                id_num = initalize_user(con,ident_address,usr_bm_address)               
+                cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['admin+',id_num])
+                con.commit
+                break
+            else:
+                id_num,ident_bm_address,admin_moderator = temp
+
+                if ident_bm_address == ident_address:               
+                    cur.execute("UPDATE users_config SET admin_moderator=? WHERE id=?",['admin+',id_num])
+                    con.commit
+                    break
+        
+        new_message = 'BM-%s successfully added to Admin+. A notice was automatically sent to notify them.' % usr_bm_address
+        tmp_msg = 'This address has been added to the Admin+ group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (usr_bm_address,ident_address)
+        send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
+    else:
+        new_message = 'Invalid Bitmessage address: BM-%s' % bm_address
+
+    return new_message
+
+# Used to remove privileges for moderators/admins/admin+s
+def remPrivilege(con,ident_address,usr_bm_address): 
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
     
@@ -763,22 +902,29 @@ def remAdmin(con,ident_address,usr_bm_address):
                     break
                     
         
-        new_message = 'BM-%s successfully removed from moderators.' % bm_address
+        new_message = 'Successfully removed privileges from address: BM-%s' % bm_address
     else:
         new_message = 'Invalid Bitmessage address: BM-%s' % bm_address
 
     return new_message
 
-def ln_brk():
+def ln_brk(how_many=None):
     # Returns line break for use in Bitmessage Messages. There is probably a better way to do this but whatever.
-    line_break = '''
+    if how_many == None:
+        line_break = '''
 '''
+    else:
+        line_break=''
+        for n in range (0,int(how_many)):
+            line_break += '''
+'''
+            
     return line_break
 
-def listModerators(con,ident_address):
+def listAdminPlus(con,ident_address):
     try:
         ident_address = format_address(ident_address)
-        new_message = '----- List of Moderators -----'
+        new_message = '----- List of Administrators -----'
         cur = con.cursor()
         cur.execute("SELECT usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted FROM users_config WHERE ident_bm_address=?",[ident_address,])
         while True:
@@ -790,7 +936,7 @@ def listModerators(con,ident_address):
             else:
                 usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted = temp
 
-                if admin_moderator == 'moderator':
+                if admin_moderator == 'admin+':
                     whitelisted = 'False'
                     blacklisted = 'False'
                     
@@ -802,7 +948,8 @@ def listModerators(con,ident_address):
                     new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
         return new_message
     except Exception,e:
-        print 'listAdmins ERROR: ',e
+        print 'listAdmin+ ERROR: ',e
+        return ''
 
 def listAdmins(con,ident_address):
     try:
@@ -832,6 +979,37 @@ def listAdmins(con,ident_address):
         return new_message
     except Exception,e:
         print 'listAdmins ERROR: ',e
+        return ''
+
+def listModerators(con,ident_address):
+    try:
+        ident_address = format_address(ident_address)
+        new_message = '----- List of Moderators -----'
+        cur = con.cursor()
+        cur.execute("SELECT usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted FROM users_config WHERE ident_bm_address=?",[ident_address,])
+        while True:
+            temp = cur.fetchone()
+
+            if temp == None or temp == '':
+                new_message += ln_brk() + '----- End -----'
+                break
+            else:
+                usr_bm_address,nickname,admin_moderator,whitelisted_blacklisted = temp
+
+                if admin_moderator == 'moderator':
+                    whitelisted = 'False'
+                    blacklisted = 'False'
+                    
+                    if whitelisted_blacklisted == 'blacklisted':
+                        blacklisted = 'True'
+                    elif whitelisted_blacklisted == 'whitelisted':
+                        whitelisted = 'True'
+
+                    new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
+        return new_message
+    except Exception,e:
+        print 'listModerators ERROR: ',e
+        return ''
         
 def listUsers(con,ident_address):
     try:
@@ -862,6 +1040,28 @@ def listUsers(con,ident_address):
         return new_message
     except Exception,e:
         print 'listUsers ERROR: ',e
+        return ''
+
+def listFilters(con):
+    cur = con.cursor()
+    
+    new_message = '----- Filter List -----' + ln_brk()
+    cur.execute('SELECT id,banned_text FROM filter')
+    while True:
+        temp = cur.fetchone()
+        if temp == None or temp == '':
+            new_message += '----- End -----'
+            break
+        else:
+            id_num,banned_text = temp
+
+        new_message += 'Filter ID: %s' % id_num + ln_brk()
+        new_message += 'Filter Length: %s characters' % str(len(banned_text)) + ln_brk()
+        new_message += 'Filter Snippet [%s...]' % str(banned_text)[:64] + ln_brk()
+
+        new_message += ln_brk(2)
+
+    return new_message
         
 def getStats(con,ident_address,time_period):
     cur = con.cursor()
@@ -925,6 +1125,8 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
         subject = str(subject)
 
         if is_global_admin(con,usr_bm_address):
+            usr_access_level = 4
+        elif is_adminPlus(con,ident_address,usr_bm_address):
             usr_access_level = 3
         elif is_admin(con,ident_address,usr_bm_address):
             usr_access_level = 2
@@ -941,20 +1143,20 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
         cur.execute('INSERT INTO command_history VALUES(?,?,?,?,?,?)', [None,ident_address,usr_bm_address,date_time,command,message_snippet])
         con.commit()
             
-        new_subject = '[BM-MODERATOR]'
+        new_subject = '[BM-MODERATOR] ' + str(subject)[:16]
         new_message = ''
 
         cmd_failed = False
         
         if (command == '--setnick' or command == '--setnickname') and usr_access_level >= 0: #Anyone can do this
-            # TODO, check to make sure nick isn't already taken
-            # TODO, add clearnick to allow moderators/admins to clear nicknames for addresses
             new_message = setNick(con,ident_address,usr_bm_address,message)
 
         elif command == '--help' and usr_access_level > 0:
             if is_global_admin(con,usr_bm_address):
                 new_message = 'Your Access Level is: Owner'
                 new_message += ln_brk()
+            elif is_adminPlus(con,ident_address,usr_bm_address):
+                new_message = 'Your Access Level is: Admin+'
             elif is_admin(con,ident_address,usr_bm_address):
                 new_message = 'Your Access Level is: Admin'
             elif is_moderator(con,ident_address,usr_bm_address):
@@ -963,6 +1165,9 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
                 new_message = 'Your Access Level is: User'
             
             new_message += ln_brk() + help_file()
+            
+        elif command == '--clearnick' and usr_access_level > 0:
+            new_message = clearNick(con,ident_address,message)            
 
         elif command == '--addwhitelist' and usr_access_level > 0:
             new_message = addWhiteList(con,ident_address,message,new_subject)
@@ -983,11 +1188,25 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             cur.execute('INSERT INTO filter VALUES(?,?)', [None,str(message)])
             new_message = 'Message added to filter list. Any message, to any address on this server, with this text in it will be deleted and no other actions taken.'
 
-        elif command == '--clearfilters' and usr_access_level > 0:
-            # TODO, add ability to list current filters and delete individual ones?
-            cur.execute("DROP TABLE IF EXISTS filter")
-            cur.execute("CREATE TABLE filter(id INTEGER PRIMARY KEY, banned_text TEXT)")
-            new_message = 'All filters have been cleared.'
+        elif command == '--listfilters' and usr_access_level > 0:
+            new_message = listFilters(con)
+
+        elif command == '--clearfilter' and usr_access_level > 0:
+            tmp_msg = str(message).lower()
+            tmp_msg = tmp_msg.strip()
+            
+            if is_int(tmp_msg):
+                try:
+                    cur.execute("DELETE FROM filter WHERE id=?",[tmp_msg])
+                except:
+                    new_message = 'Removing filter (%s) failed. Are you sure you chose the correct filter number?'
+                else:
+                    new_message = 'Filter (%s) successfully removed.'
+            elif tmp_msg == 'all':
+                cur.execute("DROP TABLE IF EXISTS filter")
+                cur.execute("CREATE TABLE filter(id INTEGER PRIMARY KEY, banned_text TEXT)")
+            else:
+                new_message = 'Invalid filter ID: %s' % tmp_msg
             
         elif command == '--setlabel' and usr_access_level > 1:
             tmp_label = str(message)
@@ -1003,22 +1222,31 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             new_message = addModerator(con,ident_address,message,new_subject)
             
         elif command == '--remmoderator' and usr_access_level > 1:   
-            new_message = remModerator(con,ident_address,message)
+            new_message = remPrivilege(con,ident_address,message)
+        
+        elif command == '--listmoderators' and usr_access_level > 1:
+            new_message = listModerators(con,ident_address)
             
         elif command == '--addadmin' and usr_access_level > 2:
             new_message = addAdmin(con,ident_address,message,new_subject)
             
         elif command == '--remadmin' and usr_access_level > 2:  
-            new_message = remAdmin(con,ident_address,message)
+            new_message = remPrivilege(con,ident_address,message)
+
+        elif command == '--listadmins' and usr_access_level > 2:
+            new_message = listAdmins(con,ident_address)
+
+        elif command == '--addadmin+' and usr_access_level > 3:
+            new_message = addAdminPlus(con,ident_address,message,new_subject)
+            
+        elif command == '--remadmin+' and usr_access_level > 3:
+            new_message = remPrivilege(con,ident_address,message)
+
+        elif command == '--listadmin+' and usr_access_level > 3:
+            new_message = listAdminPlus(con,ident_address)
 
         elif command == '--sendbroadcast' and usr_access_level > 1:
             send_broadcast(con,ident_address,new_subject,message)
-
-        elif command == '--listmoderators' and usr_access_level > 1:
-            new_message = listModerators(con,ident_address)
-            
-        elif command == '--listadmins' and usr_access_level > 2:
-            new_message = listAdmins(con,ident_address)
             
         elif command == '--listusers' and usr_access_level > 1:
             new_message = listUsers(con,ident_address)
@@ -1087,6 +1315,9 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             
         elif command == '--getcommandhistory' and usr_access_level > 1:
             new_message = getCommandHistory(con,ident_address)
+        
+        elif command == '--getinfo' and usr_access_level > 2:
+            new_message = getInfo(con)
             
         elif usr_access_level > 0:
             new_message = 'Unknown command: %s' % str(subject)
@@ -1115,13 +1346,13 @@ def echo(con,myAddress,replyAddress,message,subject):
 
         subject = subject.lstrip() # Removes prefix white spaces
 
-        if (len(subject) > 32): #Truncates the subject if it is too long
+        if (len(subject) > 32): # Truncates the subject if it is too long
             subject = (subject[:32] + '... Truncated')
 
         #if (str(subject[:len(label)+1]) != '%s:' % label):
         #    subject = '%s: %s'% (label,subject) #only adds prefix if not already there
         
-        if (len(message) > int(max_msg_length)) and (str(max_msg_length) != '0'): #Truncates the message if it is too long
+        if (len(message) > int(max_msg_length)) and (str(max_msg_length) != '0'): # Truncates the message if it is too long
             message = (message[:int(max_msg_length)] + '... Truncated to %s characters.\n' % max_msg_length)
         
         echoMessage = ('Message successfully received at ' + strftime("%Y-%m-%d %H:%M:%S",gmtime()) + ' UTC/GMT.\n' + '-------------------------------------------------------------------------------\n' + message + '\n\n\n' + str(motd))
@@ -1134,37 +1365,37 @@ def mailing_list(con,myAddress,replyAddress,message,subject):
     try:
         cur = con.cursor()
 
-        temp = get_bm_ident_info(con, myAddress) #Get info about the address it was sent to(our address)
+        temp = get_bm_ident_info(con, myAddress) # Get info about the address it was sent to(our address)
         if temp == None:
             print 'mailing_list error, no data'
             return None
 
         label,enabled,motd,whitelisted,max_msg_length,echo_address = temp
-        #only label,motd,and max_msg_length used here
+        # Only label,motd,and max_msg_length used here
         max_msg_length = int(max_msg_length)
 
-        subject = subject.lstrip() #Removes left spaces
+        subject = subject.lstrip() # Removes left spaces
 
-        if (len(subject) > 64): #Truncates the subject if it is too long
+        if (len(subject) > 64): # Truncates the subject if it is too long
             subject = (subject[:64] + '...')
             
         if (str((subject[:3]).lower()) == 're:'):
-                subject = subject[3:] #Removes re: or RE: from subject
+                subject = subject[3:] # Removes re: or RE: from subject
                 
-        subject = subject.lstrip() #Removes left spaces
+        subject = subject.lstrip() # Removes left spaces
                 
         if (str(subject[:len(label)+2]) == '[%s]'% label):
-            subject = subject[len(label)+2:] #Removes label
+            subject = subject[len(label)+2:] # Removes label
 
-        subject = subject.lstrip() #Removes left spaces
+        subject = subject.lstrip() # Removes left spaces
             
         subject = '[%s] %s'% (label,subject)
         
-        if (len(message) > max_msg_length) and (str(max_msg_length) != '0'): #Truncates the message if it is too long
+        if (len(message) > max_msg_length) and (str(max_msg_length) != '0'): # Truncates the message if it is too long
             message = (message[:max_msg_length] + '... Truncated to %s characters.\n' % max_msg_length)
 
 
-        #Get nickname
+        # Get nickname
         cur.execute("SELECT ident_bm_address,nickname FROM users_config WHERE usr_bm_address=?",[replyAddress])
         while True:
             temp = cur.fetchone()
@@ -1184,25 +1415,24 @@ def mailing_list(con,myAddress,replyAddress,message,subject):
 
         message = strftime("%a, %Y-%m-%d %H:%M:%S UTC",gmtime()) + '   Message ostensibly from BM-%s (%s):\n%s\n\n%s' % (replyAddress,nickname,motd,message) 
 
-        send_broadcast(con,myAddress,subject,message) #Build the message and send it
+        send_broadcast(con,myAddress,subject,message) # Build the message and send it
     except Exception,e:
         print 'mailing_list ERROR: ',e
 
 def send_message(con,to_address,from_address,subject,message):
     try:
-        api = xmlrpclib.ServerProxy(api_data(con)) #Connect to BitMessage
-        subject = subject.encode('base64') #Encode the subject
-        message = message.encode('base64') #Encode the message.
-        api.sendMessage(to_address,from_address,subject,message) #Build the message and send it
+        api = xmlrpclib.ServerProxy(api_data(con)) # Connect to BitMessage
+        subject = subject.encode('base64') # Encode the subject
+        message = message.encode('base64') # Encode the message.
+        api.sendMessage(to_address,from_address,subject,message) # Build the message and send it
 
-        #Add to daily stats
+        # Add to daily stats
         date_day = strftime("%Y-%m-%d",gmtime())
         cur = con.cursor()
-        #num_sent_broadcasts,num_sent_messages
         cur.execute('SELECT id,bm_address,num_sent_messages FROM stats WHERE date_day=?' ,[date_day,])
         temp = cur.fetchone()
         if temp == None or temp == '':
-            #Inserting new day
+            # Inserting new day
             cur.execute('INSERT INTO stats VALUES(?,?,?,?,?)', [None,date_day,from_address,0,1])
         else:
             id_num,bm_address,num_sent_messages = temp
@@ -1217,19 +1447,18 @@ def send_message(con,to_address,from_address,subject,message):
 
 def send_broadcast(con,broadcast_address,subject,message):
     try:
-        api = xmlrpclib.ServerProxy(api_data(con)) #Connect to BitMessage
-        subject = subject.encode('base64') #Encode the subject
-        message = message.encode('base64') #Encode the message.
-        api.sendBroadcast(broadcast_address,subject,message) #Build the broadcast and send it
+        api = xmlrpclib.ServerProxy(api_data(con)) # Connect to BitMessage
+        subject = subject.encode('base64') # Encode the subject
+        message = message.encode('base64') # Encode the message.
+        api.sendBroadcast(broadcast_address,subject,message) # Build the broadcast and send it
 
-        #Add to daily stats
+        # Add to daily stats
         date_day = strftime("%Y-%m-%d",gmtime())
         cur = con.cursor()
-        #num_sent_broadcasts,num_sent_messages
         cur.execute('SELECT id,bm_address,num_sent_broadcasts FROM stats WHERE date_day=?' ,[date_day,])
         temp = cur.fetchone()
         if temp == None or temp == '':
-            #Inserting new day
+            # Inserting new day
             cur.execute('INSERT INTO stats VALUES(?,?,?,?,?)', [None,date_day,broadcast_address,1,0])
         else:
             id_num,bm_address,num_sent_broadcasts = temp
@@ -1274,27 +1503,27 @@ def main_loop():
     con = lite.connect(database) #Only connects to database when needed
     while True:
         try:
-            #Check if messages in inbox
+            # Check if messages in inbox
             if check_if_new_msg(con) == True:
                 print 'Message found. Processing'
                 temp = process_new_message(con)
                 if temp == None:
                     print 'No actions'
-                    pass #Perform no actions
+                    pass # Perform no actions
                 else:
                     toAddress,fromAddress,message,subject = temp
                     
-                    if is_blacklisted(con,toAddress,fromAddress): #check if address is blacklisted
+                    if is_blacklisted(con,toAddress,fromAddress): # Check if address is blacklisted
                         print 'Blacklisted User'
-                        pass #Perform no actions
-                    elif is_command(subject): #check if a command is being attempted
+                        pass # Perform no actions
+                    elif is_command(subject): # Check if a command is being attempted
                         print 'Command discovered: ',str(subject)
                         throwAway = get_bm_ident_info(con,toAddress)
-                        #Initalize address if not already done. throwAway variable is not used                                                      
-                        perform_command(con,toAddress,fromAddress,message,subject) #Performs command actions and sends necessary broadcast/message
+                        # Initalize address if not already done. throwAway variable is not used                                                      
+                        perform_command(con,toAddress,fromAddress,message,subject) # Performs command actions and sends necessary broadcast/message
                     else:
                         print 'Other discovered'
-                        temp2 = get_bm_ident_info(con,toAddress) #Get info about the address it was sent to(our address)
+                        temp2 = get_bm_ident_info(con,toAddress) # Get info about the address it was sent to(our address)
                         if temp2 != None:
                             label,enabled,motd,whitelisted,max_msg_length,echo_address = temp2
                             
@@ -1303,12 +1532,14 @@ def main_loop():
                                 tmp_msg = 'Congratulations, you have been added to this address. You can set your nickname by replying with Subject:"--setNick" and Message:"Your Nickname"' % (usr_bm_address,ident_address)
                                 send_message(con,fromAddress,toAddress,'[BM-MODERATOR]',tmp_msg)
                             elif (str(enabled).lower() != 'false'): 
-                                #Determine permissions of ident address and user address
+                                # Determine permissions of ident address and user address
                                 if (str(whitelisted).lower() != 'true'):
                                     performAction = True
                                 elif (str(whitelisted).lower() == 'true' and is_whitelisted(con,toAddress,fromAddress) == True):
                                     performAction = True
                                 elif is_global_admin(con,fromAddress):
+                                    performAction = True
+                                elif is_adminPlus(con,toAddress,fromAddress):
                                     performAction = True
                                 elif is_admin(con,toAddress,fromAddress):
                                     performAction = True
@@ -1328,20 +1559,18 @@ def main_loop():
                                     print 'Insufficient Privileges'
                 print 'Finished with Message.'
 
-            #Check again, this time to determine sleep time and whether or not to close the database connection
+            # Check again, this time to determine sleep time and whether or not to close the database connection
             if check_if_new_msg(con) == True: 
                 print 'sleep 1'
-                time.sleep(1) #How often to loop when there are messages
+                time.sleep(1) # How often to loop when there are messages
             else:
-                #print 'sleep 15'
-                time.sleep(15) #How often to run the loop on no msg
+                time.sleep(15) # How often to run the loop on no msg
 
-            #break #FOR TESTING, ONLY RUNS THROUGH ONCE
         except Exception,e:
             print 'main_loop ERROR: ',e
             print 'sleep 30'
             time.sleep(30)
-    con.close() #Close connection since there are no more messages
+    con.close()
 
 def initConfig():
     print '-Initalizing Moderator-\n'
@@ -1394,7 +1623,7 @@ def initConfig():
                 bm_address = uInput
                 
                 if bm_address[:3].lower() == 'bm-':
-                    bm_address = bm_address[3:] #remove BM- prefix
+                    bm_address = bm_address[3:]
                     
                 con = lite.connect(database) 
                 cur = con.cursor()
@@ -1407,19 +1636,19 @@ def initConfig():
             else:
                 print 'Invalid address. Try again'
     
-    elif uInput.lower() == 'g': #Generate new address
+    elif uInput.lower() == 'g':
         con = lite.connect(database)  
         cur = con.cursor()
         the_address = generateAddress(con)
         if decodeAddress(the_address) == True:
-            #Let's alert the global admin. Find address if it exists
+            # Let's alert the global admin. Find address if it exists
             cur.execute("SELECT global_admin_bm_address FROM api_config WHERE id=?",('0',))
             temp = cur.fetchone()
 
             if temp == None or temp == '':
                 print '\nAddress Generated (BM-%s)\n' % the_address
                 print 'Global Admin not set. Auto-Notification not sent.'
-                pass #Address not entered
+                pass
             else:
                 global_admin_bm_address = str(temp[0])
                 addAdmin(con,the_address,global_admin_bm_address,'[BM-Moderator]')
@@ -1437,27 +1666,26 @@ def main():
             
         if arg == "startingUp":
             main_loop()
-            sys.exit() #No action
+            sys.exit()
                                                   
         elif arg == "newMessage":
-            #TODO, check if process already running, if not, start
+            # TODO, check if process already running, if not, start
             # - This could be used in the event of this process stopping for an unknown reason
-            sys.exit() #No action
+            sys.exit()
             
         elif arg == "newBroadcast":
-            sys.exit()#No action
+            sys.exit()
                                                   
         elif arg == "initalize":
             initConfig()
-            sys.exit()#No action
+            sys.exit()
             
         elif arg == "apiTest":
             pass
-            #TODO, add apiTest function
+            # TODO, add apiTest function
         else:
-            print 'unknown command'
-            #assert False, "unhandled option"
-            sys.exit() #Not a relevant argument, exit
+            print 'unknown command  (%s)' % arg
+            sys.exit() # Not a relevant argument, exit
     except Exception,e:
         print e
 
