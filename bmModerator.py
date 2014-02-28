@@ -1255,7 +1255,7 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             new_message = getInfo(con)
             
         elif usr_access_level > 0:
-            new_message = 'Unknown command: %s' % str(subject)
+            new_message = 'Unknown command or insufficent privileges: %s' % str(subject)
             # Note: user with access level 0 will not get a reply. This prevents a DOS attack vector.
         con.commit()
         
