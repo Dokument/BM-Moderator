@@ -74,7 +74,7 @@ def decodeAddress(address):
             return False
 
         return True
-    except Exception,e:
+    except Exception as e:
         print 'ERROR decoding address:',e
     return False
 
@@ -85,7 +85,7 @@ def create_db():
     try:
         os.remove(database)
         time.sleep(1)
-    except Exception,e:
+    except Exception as e:
         pass
     
     try:
@@ -108,7 +108,7 @@ def create_db():
         con.commit()
         cur.close()
 
-    except Exception,e:
+    except Exception as e:
         print 'Failed creating database (%s):%s' % (database,e)
 '''
 def create_add_address_table(con,ident_address):    
@@ -121,7 +121,7 @@ def create_add_address_table(con,ident_address):
         
         con.commit()
         return True
-    except Exception,e:
+    except Exception as e:
         print 'Failed',e
         return False
 '''
@@ -135,13 +135,14 @@ def api_data(con):
 
     if temp == None or temp == '':
         print 'Data Error with API Table. Blank.'
+        return
     else:
         api_port,api_address,api_username,api_password = temp
         
     return "http://" + str(api_username) + ":" + str(api_password) + "@" + str(api_address)+ ":" + str(api_port) + "/"
 
 def is_int(s):
-    try: 
+    try:
         int(s)
         return True
     except ValueError:
@@ -289,7 +290,7 @@ Moderator Commands
 --Help                  This help file is sent to you as a message
 --clearNick             Send nickname to remove or send address to remove nickname from.
 --addWhitelist          Adds a user to the whitelist for this address
---remWhitelist          Removes a user from the blacklist for this address
+--remWhitelist          Removes a user from the whitelist for this address
 --addBlacklist          Adds a user to the blacklist for this address
 --remBlacklist          Removes a user from the blacklist for this address
 --inviteUser            Sends an invitation to whitelist users for this address
@@ -422,7 +423,7 @@ def getInfo(con):
         message += listFilters(con)
             
         return message
-    except Exception,e:
+    except Exception as e:
         print 'getInfo ERROR: ',e
         return ''
 
@@ -465,18 +466,18 @@ def banned_text(con,string_text):
 
 def check_if_new_msg(con):
     # Returns true if there are messages in the inbox
-    api = xmlrpclib.ServerProxy(api_data(con))
+    apiurl = api_data(con)
+    if not apiurl: return
+    api = xmlrpclib.ServerProxy(apiurl)
     inboxMessages = json.loads(api.getAllInboxMessages())
     numMessages = len(inboxMessages['inboxMessages'])
-
-    if numMessages == 0:
-        return False
-    else:
-        return True
+    return numMessages != 0
 
 def process_new_message(con):
     try:
-        api = xmlrpclib.ServerProxy(api_data(con))
+        apiurl = api_data(con)
+        if not apiurl: return
+        api = xmlrpclib.ServerProxy(apiurl)
         inboxMessages = json.loads(api.getAllInboxMessages())
 
         oldesMessage = 0
@@ -491,29 +492,20 @@ def process_new_message(con):
         api.trashMessage(msgId)
         #sys.exit() # Temporary, used for dev
         
-        if banned_text(con,message) == True:
-            print 'message contains banned text'
-            return None
-            
-        elif banned_text(con,subject) == True:
-            print 'subject contains banned text'
+        if banned_text(con,subject + " " + message):
+            print 'subject/message contains banned text'
             return None
         else: 
-            
             toAddress = format_address(toAddress)
             fromAddress = format_address(fromAddress)
-            
             return toAddress,fromAddress,message,subject
 
-    except Exception,e:
+    except Exception as e:
         print 'process_new_message ERROR: ',e
         return None
         
 def is_address(bm_address):
-    if decodeAddress(bm_address) == True:
-        return True
-    else:
-        return False
+    return decodeAddress(bm_address)
 
 def nick_taken(con,ident_address,nickname):
     # Returns True if a nickname is already taken
@@ -530,15 +522,19 @@ def nick_taken(con,ident_address,nickname):
                 return True
 
 def generateAddress(con,label=None):
-    api = xmlrpclib.ServerProxy(api_data(con))
-    if label == None:
-        label = 'bmModerator'
-
+    apiurl = api_data(con)
+    if not apiurl: return
+    api = xmlrpclib.ServerProxy(apiurl)
+    if label is None: label = 'bmModerator'
     label = label.encode('base64')
-    
-    generatedAddress = api.createRandomAddress(label)
-    generatedAddress = format_address(generatedAddress)
-    return generatedAddress
+
+    try:
+        generatedAddress = api.createRandomAddress(label)
+        generatedAddress = format_address(generatedAddress)
+        return generatedAddress
+    except Exception as e:
+        print 'generateAddress ERROR: ',e
+        return None
 
 def initalize_user(con,ident_bm_address,usr_bm_address):
     usr_bm_address = format_address(usr_bm_address)
@@ -908,18 +904,8 @@ def remPrivilege(con,ident_address,usr_bm_address):
 
     return new_message
 
-def ln_brk(how_many=None):
-    # Returns line break for use in Bitmessage Messages. There is probably a better way to do this but whatever.
-    if how_many == None:
-        line_break = '''
-'''
-    else:
-        line_break=''
-        for n in range (0,int(how_many)):
-            line_break += '''
-'''
-            
-    return line_break
+def ln_brk(how_many=1):
+    return "\n"*how_many
 
 def listAdminPlus(con,ident_address):
     try:
@@ -947,7 +933,7 @@ def listAdminPlus(con,ident_address):
 
                     new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
         return new_message
-    except Exception,e:
+    except Exception as e:
         print 'listAdmin+ ERROR: ',e
         return ''
 
@@ -977,7 +963,7 @@ def listAdmins(con,ident_address):
 
                     new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
         return new_message
-    except Exception,e:
+    except Exception as e:
         print 'listAdmins ERROR: ',e
         return ''
 
@@ -1007,7 +993,7 @@ def listModerators(con,ident_address):
 
                     new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
         return new_message
-    except Exception,e:
+    except Exception as e:
         print 'listModerators ERROR: ',e
         return ''
         
@@ -1038,7 +1024,7 @@ def listUsers(con,ident_address):
 
                     new_message += ln_brk() + 'BM-%s   Whitelisted:%s   Blacklisted:%s   Nickname:%s' % (usr_bm_address,whitelisted,blacklisted,nickname)
         return new_message
-    except Exception,e:
+    except Exception as e:
         print 'listUsers ERROR: ',e
         return ''
 
@@ -1274,7 +1260,7 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
                 cur.execute("UPDATE bm_addresses_config SET max_msg_length=? WHERE bm_address=?",[int(message),ident_address])
                 new_message = 'Maximum message length successfully changed to %s characters. Messages longer than this will be truncated.' % message
             else:
-                cmd_failed == True
+                cmd_failed = True
 
         elif command == '--enable' and usr_access_level > 1:
             cur.execute("UPDATE bm_addresses_config SET enabled=? WHERE bm_address=?",['true',ident_address])
@@ -1324,18 +1310,20 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             # Note: user with access level 0 will not get a reply. This prevents a DOS attack vector.
         con.commit()
         
-        if cmd_failed == True:
+        if cmd_failed:
             new_message = 'Command failed. (%s) (%s)' %(subject,message)
             
         if new_message != '':
             send_message(con,usr_bm_address,ident_address,new_subject,new_message)
             
-    except Exception,e:
+    except Exception as e:
         print 'perform_command ERROR: ',e
 
 def echo(con,myAddress,replyAddress,message,subject):
     try:
-        api = xmlrpclib.ServerProxy(api_data(con))
+        apiurl = api_data(con)
+        if not apiurl: return
+        api = xmlrpclib.ServerProxy(apiurl)
 
         temp = get_bm_ident_info(con, myAddress)
         if temp == None:
@@ -1358,7 +1346,7 @@ def echo(con,myAddress,replyAddress,message,subject):
         echoMessage = ('Message successfully received at ' + strftime("%Y-%m-%d %H:%M:%S",gmtime()) + ' UTC/GMT.\n' + '-------------------------------------------------------------------------------\n' + message + '\n\n\n' + str(motd))
 
         send_message(con,replyAddress,myAddress,subject,echoMessage)
-    except Exception,e:
+    except Exception as e:
         print 'echo ERROR: ',e
 
 def mailing_list(con,myAddress,replyAddress,message,subject):
@@ -1416,12 +1404,14 @@ def mailing_list(con,myAddress,replyAddress,message,subject):
         message = strftime("%a, %Y-%m-%d %H:%M:%S UTC",gmtime()) + '   Message ostensibly from BM-%s (%s):\n%s\n\n%s' % (replyAddress,nickname,motd,message) 
 
         send_broadcast(con,myAddress,subject,message) # Build the message and send it
-    except Exception,e:
+    except Exception as e:
         print 'mailing_list ERROR: ',e
 
 def send_message(con,to_address,from_address,subject,message):
     try:
-        api = xmlrpclib.ServerProxy(api_data(con)) # Connect to BitMessage
+        apiurl = api_data(con)
+        if not apiurl: return
+        api = xmlrpclib.ServerProxy(apiurl) # Connect to BitMessage
         subject = subject.encode('base64') # Encode the subject
         message = message.encode('base64') # Encode the message.
         api.sendMessage(to_address,from_address,subject,message) # Build the message and send it
@@ -1442,12 +1432,14 @@ def send_message(con,to_address,from_address,subject,message):
         con.commit()
 
         print 'Message sent'
-    except Exception,e:
+    except Exception as e:
         print 'send_message ERROR: ',e
 
 def send_broadcast(con,broadcast_address,subject,message):
     try:
-        api = xmlrpclib.ServerProxy(api_data(con)) # Connect to BitMessage
+        apiurl = api_data(con)
+        if not apiurl: return
+        api = xmlrpclib.ServerProxy(apiurl) # Connect to BitMessage
         subject = subject.encode('base64') # Encode the subject
         message = message.encode('base64') # Encode the message.
         api.sendBroadcast(broadcast_address,subject,message) # Build the broadcast and send it
@@ -1469,7 +1461,7 @@ def send_broadcast(con,broadcast_address,subject,message):
 
 
         print 'Broadcast sent'
-    except Exception,e:
+    except Exception as e:
         print 'send_broadcast ERROR: ',e
 
 def accept_invite(con,ident_address,usr_bm_address,subject):
@@ -1504,7 +1496,7 @@ def main_loop():
     while True:
         try:
             # Check if messages in inbox
-            if check_if_new_msg(con) == True:
+            if check_if_new_msg(con):
                 print 'Message found. Processing'
                 temp = process_new_message(con)
                 if temp == None:
@@ -1535,7 +1527,7 @@ def main_loop():
                                 # Determine permissions of ident address and user address
                                 if (str(whitelisted).lower() != 'true'):
                                     performAction = True
-                                elif (str(whitelisted).lower() == 'true' and is_whitelisted(con,toAddress,fromAddress) == True):
+                                elif (str(whitelisted).lower() == 'true' and is_whitelisted(con,toAddress,fromAddress)):
                                     performAction = True
                                 elif is_global_admin(con,fromAddress):
                                     performAction = True
@@ -1548,7 +1540,7 @@ def main_loop():
                                 else:
                                     performAction = False
                                     
-                                if performAction == True:
+                                if performAction:
                                     if str(echo_address).lower() == 'true':
                                         print 'Echo'
                                         echo(con,toAddress,fromAddress,message,subject)
@@ -1560,13 +1552,13 @@ def main_loop():
                 print 'Finished with Message.'
 
             # Check again, this time to determine sleep time and whether or not to close the database connection
-            if check_if_new_msg(con) == True: 
+            if check_if_new_msg(con): 
                 print 'sleep 1'
                 time.sleep(1) # How often to loop when there are messages
             else:
                 time.sleep(15) # How often to run the loop on no msg
 
-        except Exception,e:
+        except Exception as e:
             print 'main_loop ERROR: ',e
             print 'sleep 30'
             time.sleep(30)
@@ -1575,10 +1567,12 @@ def main_loop():
 def initConfig():
     print '-Initalizing Moderator-\n'
 
-    print 'Would you like to (I)nitalize the application, update the (A)PI info, (S)et the global administrator, or (G)enerate a new random identity?(I/A/S/G)'
+    print 'Would you like to (I)nitalize the application, update the (A)PI info,'
+    print '(S)et the global administrator, or (G)enerate a new random identity?(I/A/S/G)'
     uInput = raw_input('> ')
     if uInput.lower() == 'i':
-        print 'Any existing databases will be deleted. Are you sure that you want to continue?(Y/N)'
+        print 'Any existing databases will be deleted.'
+        print 'Are you sure that you want to continue? (Y/N)'
         uInput = raw_input('> ')
         if uInput.lower() == 'y':
             create_db()
@@ -1640,7 +1634,7 @@ def initConfig():
         con = lite.connect(database)  
         cur = con.cursor()
         the_address = generateAddress(con)
-        if decodeAddress(the_address) == True:
+        if decodeAddress(the_address):
             # Let's alert the global admin. Find address if it exists
             cur.execute("SELECT global_admin_bm_address FROM api_config WHERE id=?",('0',))
             temp = cur.fetchone()
@@ -1686,7 +1680,7 @@ def main():
         else:
             print 'unknown command  (%s)' % arg
             sys.exit() # Not a relevant argument, exit
-    except Exception,e:
+    except Exception as e:
         print e
 
 if __name__ == '__main__':

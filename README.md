@@ -45,7 +45,7 @@ Moderator Commands
 - --Help                  This help file is sent to you as a message
 - --clearNick             Send nickname to remove or send address to remove nickname from.
 - --addWhitelist          Adds a user to the whitelist for this address
-- --remWhitelist          Removes a user from the blacklist for this address
+- --remWhitelist          Removes a user from the whitelist for this address
 - --addBlacklist          Adds a user to the blacklist for this address
 - --remBlacklist          Removes a user from the blacklist for this address
 - --inviteUser            Sends an invitation to whitelist users for this address
