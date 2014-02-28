@@ -854,7 +854,7 @@ def remPrivilege(con,ident_address,usr_bm_address):
     return new_message
 
 def ln_brk(how_many=1):
-    return "\n"*how_many
+    return "\n"*int(how_many)
 
 def listAdminPlus(con,ident_address):
     try:
