@@ -16,70 +16,16 @@ import sqlite3 as lite
 
 database = 'bmModerator.db'
 
-# Begin BM address verifiication
-# ##############################################################################################################
-
-ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
-def decodeBase58(string, alphabet=ALPHABET): #Taken from addresses.py
-    """Decode a Base X encoded string into the number
-
-    Arguments:
-    - `string`: The encoded string
-    - `alphabet`: The alphabet to use for encoding
-    """
-    base = len(alphabet)
-    strlen = len(string)
-    num = 0
-
-    try:
-        power = strlen - 1
-        for char in string:
-            num += alphabet.index(char) * (base ** power)
-            power -= 1
-    except:
-        return 0
-    return num
-
-def decodeAddress(address):
-    try:
-        # Returns true if valid, false if not a valid address. - taken from addresses.py
-        address = str(address).strip()
-
-        if address[:3].lower() == 'bm-':
-            integer = decodeBase58(address[3:])
-        else:
-            integer = decodeBase58(address)
-            
-        if integer == 0:
-            return False
+def validAddress(address):
+    address = format_address(address)
+    
+    address_information = api.decodeAddress(address)
+    address_information = eval(address_information)
         
-        hexdata = hex(integer)[2:-1]
-
-        if len(hexdata) % 2 != 0:
-            hexdata = '0' + hexdata
-
-        data = hexdata.decode('hex')
-        checksum = data[-4:]
-
-        sha = hashlib.new('sha512')
-        sha.update(data[:-4])
-        currentHash = sha.digest()
-
-        sha = hashlib.new('sha512')
-        sha.update(currentHash)
-
-        if checksum != sha.digest()[0:4]:
-            print '\n     Checksum Failed\n'
-            return False
-
+    if 'success' in str(address_information.get('status')).lower():
         return True
-    except Exception as e:
-        print 'ERROR decoding address:',e
-    return False
-
-# ##############################################################################################################
-# End BM address verifiication
+    else:
+        return False
 
 def create_db():
     try:
@@ -400,7 +346,7 @@ def getInfo(con):
             else:
                 max_msg_length_result = str(max_msg_length)
             
-            message += 'Address: %s' % str(address)
+            message += 'Address: %s' % str(address) + ln_brk()
             message += 'Label: %s' % label + ln_brk()
             message += 'Enabled: %s' % enabled_result + ln_brk()
             message += 'Type: %s' % echo_address_result + ln_brk()
@@ -505,7 +451,8 @@ def process_new_message(con):
         return None
         
 def is_address(bm_address):
-    return decodeAddress(bm_address)
+    return validAddress(bm_address)
+    # I should probably consolidate this. TODO
 
 def nick_taken(con,ident_address,nickname):
     # Returns True if a nickname is already taken
@@ -560,10 +507,11 @@ def initalize_user(con,ident_bm_address,usr_bm_address):
 def setNick(con,ident_address,usr_bm_address,nickname):
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
+    max_nick_length = 32
     
     cur = con.cursor()
-    if (len(nickname) <= 32):
-        if (not nick_taken(con,ident_address,nickname) or is_moderator(con,usr_bm_address) or is_admin(con,usr_bm_address) or is_global_admin(con,usr_bm_address)): #If not taken and not an admin/global_admin
+    if (len(nickname) <= max_nick_length):
+        if not nick_taken(con,ident_address,nickname):
             cur.execute("SELECT id,ident_bm_address FROM users_config WHERE usr_bm_address=?",[usr_bm_address])
             while True:
                 temp = cur.fetchone()
@@ -584,9 +532,9 @@ def setNick(con,ident_address,usr_bm_address,nickname):
                          
             new_message = 'Nickname successfully changed to (%s).' % str(nickname)
         else:
-            new_message = 'Nickname already taken.'
+            new_message = 'Nickname (%s) already taken.' % str(nickname)
     else:
-        new_message = 'Nickname too long. Maximum Nickname Size: 32 Characters'
+        new_message = 'Nickname too long. Maximum Nickname Size: %s Characters' % str(max_nick_length)
     return new_message
 
 def clearNick(con,ident_address,nick_or_address):
@@ -749,7 +697,7 @@ def remBlackList(con,ident_address,usr_bm_address):
 
     return new_message
 
-def inviteUser(con,ident_address,usr_bm_address,new_subject):
+def inviteUser(con,ident_address,invitee_bm_address,usr_bm_address,new_subject):
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
     
@@ -773,14 +721,15 @@ def inviteUser(con,ident_address,usr_bm_address,new_subject):
                     break
                     
         new_message = 'BM-%s successfully invited to join this address.' % usr_bm_address
-        tmp_msg = 'This address has been invited by BM-%s to join: BM-%s. Respond with "Accept" as the subject to accept this invitation.' % (usr_bm_address,ident_address)
+        tmp_msg = 'This address has been invited by BM-%s to join: BM-%s. Respond with "Accept" as the subject to accept this invitation. If you have not already, be sure to subscribe to this address.' % (invitee_bm_address,ident_address)
         send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
     else:
         new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
 
     return new_message
 
-def addModerator(con,ident_address,usr_bm_address,new_subject):
+
+def addModerator(con,ident_address,invitee_bm_address,usr_bm_address,new_subject):
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
     
@@ -804,14 +753,14 @@ def addModerator(con,ident_address,usr_bm_address,new_subject):
                     break
                     
         new_message = 'BM-%s successfully added to moderators. A notice was automatically sent to notify them.' % usr_bm_address
-        tmp_msg = 'This address has been added to the Moderator group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (usr_bm_address,ident_address)
+        tmp_msg = 'This address has been added to the Moderator group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (invitee_bm_address,ident_address)
         send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
     else:
         new_message = 'Invalid Bitmessage address: BM-%s' % usr_bm_address
 
     return new_message
 
-def addAdmin(con,ident_address,usr_bm_address,new_subject): 
+def addAdmin(con,ident_address,invitee_bm_address,usr_bm_address,new_subject): 
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
     
@@ -835,14 +784,14 @@ def addAdmin(con,ident_address,usr_bm_address,new_subject):
                     break
         
         new_message = 'BM-%s successfully added to admins. A notice was automatically sent to notify them.' % usr_bm_address
-        tmp_msg = 'This address has been added to the Admin group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (usr_bm_address,ident_address)
+        tmp_msg = 'This address has been added to the Admin group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (invitee_bm_address,ident_address)
         send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
     else:
         new_message = 'Invalid Bitmessage address: BM-%s' % bm_address
 
     return new_message
 
-def addAdminPlus(con,ident_address,usr_bm_address,new_subject): 
+def addAdminPlus(con,ident_address,invitee_bm_address,usr_bm_address,new_subject): 
     usr_bm_address = format_address(usr_bm_address)
     ident_address = format_address(ident_address)
     
@@ -866,7 +815,7 @@ def addAdminPlus(con,ident_address,usr_bm_address,new_subject):
                     break
         
         new_message = 'BM-%s successfully added to Admin+. A notice was automatically sent to notify them.' % usr_bm_address
-        tmp_msg = 'This address has been added to the Admin+ group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (usr_bm_address,ident_address)
+        tmp_msg = 'This address has been added to the Admin+ group by BM-%s for: BM-%s. Reply with the subject "--Help" for a list of commands.' % (invitee_bm_address,ident_address)
         send_message(con,usr_bm_address,ident_address,new_subject,tmp_msg)
     else:
         new_message = 'Invalid Bitmessage address: BM-%s' % bm_address
@@ -1205,7 +1154,7 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             new_message = 'Message Of The Day successfully set to (%s).' % tmp_motd
             
         elif command == '--addmoderator' and usr_access_level > 1:
-            new_message = addModerator(con,ident_address,message,new_subject)
+            new_message = addModerator(con,ident_address,usr_bm_address,message,new_subject)
             
         elif command == '--remmoderator' and usr_access_level > 1:   
             new_message = remPrivilege(con,ident_address,message)
@@ -1214,7 +1163,7 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             new_message = listModerators(con,ident_address)
             
         elif command == '--addadmin' and usr_access_level > 2:
-            new_message = addAdmin(con,ident_address,message,new_subject)
+            new_message = addAdmin(con,ident_address,usr_bm_address,message,new_subject)
             
         elif command == '--remadmin' and usr_access_level > 2:  
             new_message = remPrivilege(con,ident_address,message)
@@ -1223,7 +1172,7 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             new_message = listAdmins(con,ident_address)
 
         elif command == '--addadmin+' and usr_access_level > 3:
-            new_message = addAdminPlus(con,ident_address,message,new_subject)
+            new_message = addAdminPlus(con,ident_address,usr_bm_address,message,new_subject)
             
         elif command == '--remadmin+' and usr_access_level > 3:
             new_message = remPrivilege(con,ident_address,message)
@@ -1294,7 +1243,7 @@ def perform_command(con,ident_address,usr_bm_address,message,subject):
             cur.execute("UPDATE bm_addresses_config SET label=? WHERE bm_address=?",[tmp_label,ident_address])
             con.commit()
             
-            throwAway = addAdmin(con,new_address,usr_bm_address,new_subject)
+            throwAway = addAdmin(con,ident_address,usr_bm_address,message,new_subject)
             
         elif command == '--getstats' and usr_access_level > 1:
             new_message = getStats(con,ident_address,message)
@@ -1615,9 +1564,8 @@ def initConfig():
 
             if is_address(uInput):
                 bm_address = uInput
-                
-                if bm_address[:3].lower() == 'bm-':
-                    bm_address = bm_address[3:]
+
+                bm_address = format_address(bm_address)
                     
                 con = lite.connect(database) 
                 cur = con.cursor()
@@ -1634,7 +1582,7 @@ def initConfig():
         con = lite.connect(database)  
         cur = con.cursor()
         the_address = generateAddress(con)
-        if decodeAddress(the_address):
+        if validAddress(the_address):
             # Let's alert the global admin. Find address if it exists
             cur.execute("SELECT global_admin_bm_address FROM api_config WHERE id=?",('0',))
             temp = cur.fetchone()
@@ -1645,7 +1593,7 @@ def initConfig():
                 pass
             else:
                 global_admin_bm_address = str(temp[0])
-                addAdmin(con,the_address,global_admin_bm_address,'[BM-Moderator]')
+                addAdmin(con,the_address,'Command_Line_User',global_admin_bm_address,'[BM-Moderator]')
             print '\nAddress Generated (BM-%s) and Global Admin (BM-%s) notified.' % (the_address,global_admin_bm_address)
         else:
             print 'ERROR generating address: ', the_address
